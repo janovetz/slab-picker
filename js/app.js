@@ -19,6 +19,7 @@ for (const area of AREAS) {
     p.rects ??= [[0, 0, p.w, p.h]];
     p.poly ??= [[0, 0], [p.w, 0], [p.w, p.h], [0, p.h]];
     p.cutouts ??= [];
+    p.edge ??= [[0, 0], [p.w, 0]];
     p.edgeLabel = p.kind === 'counter' ? 'WALL' : 'TOP';
     PIECES.push(p);
     PIECE[p.id] = p;
@@ -33,6 +34,7 @@ let hoverId = null;
 let ghost = null;       // {slab, id, x, y, rot} while dragging from the cut list
 let listDragId = null;
 let issues = [];
+let notices = [];
 let flagged = new Set();
 const undoStack = [];
 const redoStack = [];
@@ -108,10 +110,22 @@ const round6 = v => Math.round(v * 1e6) / 1e6;
 // ============================================================ geometry
 function bboxSize(p, rot) { return rot % 180 === 0 ? [p.w, p.h] : [p.h, p.w]; }
 
-/** Matrix mapping piece-local inches → slab inches. */
+/**
+ * Matrix mapping piece-local inches → slab inches.
+ * `flip` mirrors the cut shape across the piece's local x axis (y → h − y) before rotating.
+ * The stone itself is never mirrored; only the outline/cutouts are.
+ */
 function localToSlab(p, pl) {
   const [tx, ty] = { 0: [0, 0], 90: [p.h, 0], 180: [p.w, p.h], 270: [0, p.w] }[pl.rot];
-  return new DOMMatrix().translate(pl.x + tx, pl.y + ty).rotate(pl.rot);
+  const m = new DOMMatrix().translate(pl.x + tx, pl.y + ty).rotate(pl.rot);
+  return pl.flip ? m.translate(0, p.h).scale(1, -1) : m;
+}
+
+/** Slab-space polygon in px, always clockwise (reflections reverse winding). */
+function slabPoly(p, pl, s) {
+  const m = localToSlab(p, pl);
+  const pts = p.poly.map(([x, y]) => { const q = m.transformPoint({ x, y }); return [q.x * s, q.y * s]; });
+  return pl.flip ? pts.reverse() : pts;
 }
 
 function slabRects(p, pl) {
@@ -147,7 +161,11 @@ function outOfBounds(id, pl, margin) {
 }
 
 function computeIssues() {
-  issues = []; flagged = new Set();
+  issues = []; notices = []; flagged = new Set();
+  for (const p of PIECES) {
+    const pl = state.placements[p.id];
+    if (pl?.flip) notices.push({ ids: [p.id], text: `${p.name} is mirrored (cut shape flipped, stone face isn’t)` });
+  }
   const { gap, margin } = state.settings;
   for (const slab of SLABS) {
     const here = placedOn(slab);
@@ -214,7 +232,7 @@ function findSpot(id, slabs = SLABS, rots = null) {
         if (y + bh > H - margin + EPS) continue;
         for (const x of xs) {
           if (x + bw > W - margin + EPS) continue;
-          const pl = { slab, x: round6(x), y: round6(y), rot };
+          const pl = { slab, x: round6(x), y: round6(y), rot, ...(cur?.flip ? { flip: true } : {}) };
           const rs = slabRects(p, pl);
           if (!rs.some(a => otherRects.some(b => rectsConflict(a, b, gap)))) return pl;
         }
@@ -241,7 +259,25 @@ function rotateSelected(dir) {
     const cx = pl.x + bw / 2, cy = pl.y + bh / 2;
     pl.rot = (pl.rot + dir + 360) % 360;
     const [nw, nh] = bboxSize(p, pl.rot);
-    pl.x = q8(cx - nw / 2); pl.y = q8(cy - nh / 2);
+    // rotate about the center, but keep it on the slab if it fits
+    const clamp = (v, max) => Math.min(Math.max(v, 0), Math.max(0, max));
+    pl.x = clamp(q8(cx - nw / 2), W - nw); pl.y = clamp(q8(cy - nh / 2), H - nh);
+  });
+}
+
+/**
+ * Mirror the selected piece in place, as seen on the slab.
+ * axis 'x': top ↔ bottom (across the horizontal axis); 'y': left ↔ right.
+ * Reflecting R(θ)·F^f across the slab's x axis gives R(−θ)·F^(1−f); across y gives R(180−θ)·F^(1−f).
+ * The bounding box is unchanged, so the piece stays where it is.
+ */
+function flipSelected(axis) {
+  const pl = state.placements[selected];
+  if (!pl) return;
+  mutate(() => {
+    pl.rot = axis === 'x' ? (360 - pl.rot) % 360 : (540 - pl.rot) % 360;
+    pl.flip = !pl.flip;
+    if (!pl.flip) delete pl.flip;
   });
 }
 
@@ -413,16 +449,24 @@ function drawPiece(ctx, p, pl, s, f) {
   if (f.flagged) ctx.setLineDash([7 * k, 4 * k]);
   ctx.stroke(); ctx.setLineDash([]);
 
-  // reference edge (wall / top) — a band just inside local y = 0
-  const band = Math.max(3, Math.min(8, s * 0.45));
-  const inset = band / 2 / s;
-  const a = T(0, inset), b = T(p.w, inset);
-  ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b);
-  ctx.lineCap = 'butt'; ctx.strokeStyle = color; ctx.lineWidth = band; ctx.stroke();
+  // reference edge (wall / top): a band just inside the edge polyline (stroke 2× wide, clipped to the piece)
+  const band = Math.max(4.5, Math.min(9, s * 0.6));
+  ctx.save();
+  ctx.beginPath(); pathPoly(ctx, poly); ctx.clip();
+  ctx.beginPath();
+  p.edge.forEach(([x, y], i) => (i ? ctx.lineTo(...T(x, y)) : ctx.moveTo(...T(x, y))));
+  ctx.lineJoin = 'miter'; ctx.lineCap = 'square'; ctx.strokeStyle = color; ctx.lineWidth = band * 2; ctx.stroke();
+  ctx.restore();
+  // edge label on the longest segment, offset along the inward normal (edge runs clockwise → inside is (−dy, dx))
+  const [e0, e1] = longestSegment(p.edge);
+  const elen = Math.hypot(e1[0] - e0[0], e1[1] - e0[1]);
+  const nx = -(e1[1] - e0[1]) / elen, ny = (e1[0] - e0[0]) / elen;
   const efs = Math.max(8, Math.min(18, s * 0.95));
+  const off = (band + efs * 0.9) / s;
+  const a = T(...e0), b = T(...e1);
   let ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
   if (ang > Math.PI / 2 + 0.01 || ang < -Math.PI / 2 - 0.01) ang += Math.PI;
-  const [tx, ty] = T(p.w / 2, (band + efs * 0.9) / s);
+  const [tx, ty] = T((e0[0] + e1[0]) / 2 + nx * off, (e0[1] + e1[1]) / 2 + ny * off);
   ctx.save();
   ctx.translate(tx, ty); ctx.rotate(ang);
   ctx.font = `500 ${efs}px "DM Mono"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -434,9 +478,19 @@ function drawPiece(ctx, p, pl, s, f) {
   const [lux, luy] = labelSpot(p);
   const [lx, ly] = T(lux, luy);
   const lines = [(f.flagged ? '⚠ ' : '') + p.name, `${fmtN(p.w)} × ${fmtN(p.h)}`];
-  if (f.coords) lines.push(`@ ${fmt(pl.x)}, ${fmt(pl.y)}${pl.rot ? ` · ${pl.rot}°` : ''}`);
+  if (f.coords) lines.push(`@ ${fmt(pl.x)}, ${fmt(pl.y)}${pl.rot ? ` · ${pl.rot}°` : ''}${pl.flip ? ' · mirrored' : ''}`);
+  else if (pl.flip) lines[1] += ' · mirrored';
   drawPill(ctx, lx, ly, lines, p.area.color, INK, labelFont(s));
   ctx.restore();
+}
+
+function longestSegment(pts) {
+  let best = [pts[0], pts[1]], bl = -1;
+  for (let i = 1; i < pts.length; i++) {
+    const l = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    if (l > bl) { bl = l; best = [pts[i - 1], pts[i]]; }
+  }
+  return best;
 }
 
 function labelSpot(p) {
@@ -464,10 +518,7 @@ function drawSlab(ctx, slab, o) {
     ctx.beginPath(); ctx.rect(0, 0, SW, SH); ctx.clip();
     ctx.beginPath();
     ctx.moveTo(0, 0); ctx.lineTo(0, SH); ctx.lineTo(SW, SH); ctx.lineTo(SW, 0); ctx.closePath(); // CCW
-    for (const [id, pl] of here) {
-      const p = PIECE[id], m = localToSlab(p, pl);
-      pathPoly(ctx, p.poly.map(([x, y]) => { const q = m.transformPoint({ x, y }); return [q.x * s, q.y * s]; })); // CW → hole
-    }
+    for (const [id, pl] of here) pathPoly(ctx, slabPoly(PIECE[id], pl, s)); // CW → hole
     ctx.fillStyle = 'rgba(16,15,13,.5)';
     ctx.fill('nonzero');
     ctx.restore();
@@ -519,14 +570,19 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
   for (const it of st.items) {
     const p = it.p, px = x0 + it.x * s, py = y0 + it.y * s;
     const pl = state.placements[p.id];
-    const poly = p.poly.map(([x, y]) => [px + x * s, py + y * s]);
+    // A piece flipped across its x axis, viewed installed (wall on top), is the left↔right mirror image.
+    const mir = !!pl?.flip;
+    const mx = x => (mir ? p.w - x : x);
+    const poly = p.poly.map(([x, y]) => [px + mx(x) * s, py + y * s]);
     boxes.push({ id: p.id, x: px, y: py, w: p.w * s, h: p.h * s });
 
     ctx.save();
     ctx.beginPath(); pathPoly(ctx, poly);
     if (pl) {
       ctx.clip();
-      const inv = localToSlab(p, pl).inverse();
+      // installed → slab = localToSlab · G, where G mirrors x when flipped; the product is a pure rotation
+      const toSlab = mir ? localToSlab(p, pl).translate(p.w, 0).scale(-1, 1) : localToSlab(p, pl);
+      const inv = toSlab.inverse();
       ctx.setTransform(base.multiply(new DOMMatrix().translate(px, py).scale(s).multiply(inv)));
       ctx.drawImage(img, 0, 0, W, H);
       ctx.setTransform(base);
@@ -537,15 +593,20 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
 
     for (const c of p.cutouts) {
       ctx.beginPath();
-      if (c.shape === 'circle') ctx.arc(px + c.cx * s, py + c.cy * s, c.r * s, 0, Math.PI * 2);
-      else ctx.rect(px + c.x * s, py + c.y * s, c.w * s, c.h * s);
+      if (c.shape === 'circle') ctx.arc(px + mx(c.cx) * s, py + c.cy * s, c.r * s, 0, Math.PI * 2);
+      else ctx.rect(px + (mir ? p.w - c.x - c.w : c.x) * s, py + c.y * s, c.w * s, c.h * s);
       ctx.fillStyle = '#2a2724'; ctx.fill();
       ctx.lineWidth = 1; ctx.strokeStyle = '#6f6a61'; ctx.stroke();
     }
 
-    // reference edge band
-    ctx.fillStyle = p.area.color;
-    ctx.fillRect(px, py, p.w * s, Math.max(2, s * 0.35));
+    // reference edge band, following the (possibly stepped) wall edge
+    ctx.save();
+    ctx.beginPath(); pathPoly(ctx, poly); ctx.clip();
+    ctx.beginPath();
+    p.edge.forEach(([x, y], i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, px + mx(x) * s, py + y * s));
+    ctx.lineJoin = 'miter'; ctx.lineCap = 'square'; ctx.strokeStyle = p.area.color;
+    ctx.lineWidth = Math.max(2, s * 0.35) * 2; ctx.stroke();
+    ctx.restore();
 
     ctx.beginPath(); pathPoly(ctx, poly);
     ctx.lineWidth = 1.25; ctx.strokeStyle = INK;
@@ -557,17 +618,20 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
 
     const fs = o.fs ?? 11;
     const [lux, luy] = labelSpot(p);
-    const cx = px + lux * s, cy = py + luy * s;
+    const cx = px + mx(lux) * s, cy = py + luy * s;
     if (!pl) {
       ctx.font = `500 ${fs}px "DM Mono"`; ctx.fillStyle = '#857f74';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(`${p.kind === 'splash' ? 'backsplash' : p.kind} · not placed`, cx, cy);
     } else if (o.tags) {
-      const t = `S${pl.slab}${pl.rot ? ` · ${pl.rot}°` : ''}${flagged.has(p.id) ? ' · ⚠' : ''}`;
+      const t = `S${pl.slab}${pl.rot ? ` · ${pl.rot}°` : ''}${pl.flip ? ' · mirrored' : ''}${flagged.has(p.id) ? ' · ⚠' : ''}`;
       ctx.font = `500 ${fs}px "DM Mono"`;
       const tw = ctx.measureText(t).width + fs;
       ctx.fillStyle = flagged.has(p.id) ? DANGER : INK;
-      const tx = px + p.w * s - tw - 4, ty = py + p.h * s - fs * 1.6 - 4;
+      // bottom-right corner of the main rectangle (stays inside L-shapes, mirrored or not)
+      const [r0x, r0y, r0w, r0h] = p.rects[0];
+      const right = mir ? p.w - r0x : r0x + r0w;
+      const tx = px + right * s - tw - 4, ty = py + (r0y + r0h) * s - fs * 1.6 - 4;
       ctx.fillRect(tx, ty, tw, fs * 1.6);
       ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(t, tx + tw / 2, ty + fs * 0.8 + 0.5);
@@ -712,7 +776,7 @@ class SlabView {
       const [bw, bh] = bboxSize(p, rot);
       const pt = this.toSlab(e.clientX, e.clientY);
       const [x, y] = snapPosition(listDragId, this.slab, pt.x - bw / 2, pt.y - bh / 2, rot, e.altKey, this.scale);
-      ghost = { slab: this.slab, id: listDragId, x, y, rot };
+      ghost = { slab: this.slab, id: listDragId, x, y, rot, flip: !!state.placements[listDragId]?.flip };
       this.wrap.classList.add('drop-hot');
       requestRender();
     });
@@ -722,7 +786,7 @@ class SlabView {
       this.wrap.classList.remove('drop-hot');
       if (!ghost) return;
       const g = ghost; ghost = null;
-      mutate(() => { state.placements[g.id] = { slab: g.slab, x: g.x, y: g.y, rot: g.rot }; });
+      mutate(() => { state.placements[g.id] = { slab: g.slab, x: g.x, y: g.y, rot: g.rot, ...(g.flip ? { flip: true } : {}) }; });
       select(g.id);
     });
   }
@@ -831,7 +895,7 @@ function renderCutlist() {
       ${area.pieces.map(p => {
         const pl = state.placements[p.id];
         const status = pl
-          ? `<span class="chip ${flagged.has(p.id) ? 'warn' : ''}">S${pl.slab}${pl.rot ? ' ↻' : ''}</span>`
+          ? `<span class="chip ${flagged.has(p.id) ? 'warn' : ''}">S${pl.slab}${pl.rot ? ' ↻' : ''}${pl.flip ? ' ⇅' : ''}</span>`
           : `<button class="auto" data-auto="${p.id}" title="Put it in the first free spot">Auto</button>`;
         return `<div class="piece-row ${pl ? '' : 'unplaced'} ${p.id === selected ? 'selected' : ''}" draggable="true" data-id="${p.id}">
           <span class="swatch" style="background:${area.color}"></span>
@@ -847,6 +911,7 @@ function renderIssues() {
   const ul = $('issues');
   const unplaced = PIECES.filter(p => !state.placements[p.id]).length;
   let html = issues.map((it, i) => `<li data-issue="${i}">⚠ ${esc(it.text)}</li>`).join('');
+  html += notices.map((it, i) => `<li class="info link" data-notice="${i}">⇅ ${esc(it.text)}</li>`).join('');
   if (unplaced) html += `<li class="info">${unplaced} piece${unplaced > 1 ? 's' : ''} not placed yet.</li>`;
   if (!issues.length && !unplaced) html = `<li class="good">Everything fits. No overlaps or edge problems.</li>`;
   else if (!issues.length) html = `<li class="good">No overlaps or edge problems.</li>` + html;
@@ -881,6 +946,7 @@ function renderInspector() {
       <div class="keys">
         <kbd>drag</kbd><span>Move (snaps to edges &amp; gaps; hold <kbd>⌥</kbd> to free-move)</span>
         <kbd>R</kbd><span>Rotate 90° (<kbd>⇧R</kbd> back), or double-click</span>
+        <kbd>F</kbd><span>Mirror top ↔ bottom (<kbd>⇧F</kbd> left ↔ right)</span>
         <kbd>← ↑ → ↓</kbd><span>Nudge ⅛″ (<kbd>⇧</kbd> 1″)</span>
         <kbd>⌫</kbd><span>Back to the cut list</span>
         <kbd>⌘C</kbd><span>Copy layout JSON</span>
@@ -904,6 +970,10 @@ function renderInspector() {
     <div class="field"><span>Rotation</span><div class="rot">
       <button data-rot="-90" title="Rotate counter-clockwise (⇧R)">⟲</button><output>${pl.rot}°</output><button data-rot="90" title="Rotate clockwise (R)">⟳</button>
     </div></div>
+    <div class="field"><span>Mirror</span><div class="rot">
+      <button data-flip="x" title="Flip top ↔ bottom, across the x axis (F)">⇅</button><output>${pl.flip ? 'on' : 'off'}</output><button data-flip="y" title="Flip left ↔ right, across the y axis (⇧F)">⇆</button>
+    </div></div>
+    ${pl.flip ? `<p class="insp-note">Mirrored: the cut shape is flipped, but the stone face isn't. Make sure the mirrored shape still fits the room.</p>` : ''}
     <div class="insp-actions"><button data-act="auto">Find free spot</button><button data-act="remove" class="danger">Remove</button></div>`
     : `<div class="insp-actions"><button data-act="auto">Auto-place</button></div>`}`;
 }
@@ -952,9 +1022,9 @@ function bindUI() {
 
   // issues
   $('issues').addEventListener('click', e => {
-    const li = e.target.closest('[data-issue]');
+    const li = e.target.closest('[data-issue], [data-notice]');
     if (!li) return;
-    const id = issues[+li.dataset.issue]?.ids[0];
+    const id = (li.dataset.issue ? issues[+li.dataset.issue] : notices[+li.dataset.notice])?.ids[0];
     if (id) { select(id); views[state.placements[id].slab - 1].card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
   });
 
@@ -969,6 +1039,7 @@ function bindUI() {
       if (pl?.slab === slab) return;
       autoPlace(selected, [slab]);
     } else if (b.dataset.rot) rotateSelected(+b.dataset.rot);
+    else if (b.dataset.flip) flipSelected(b.dataset.flip);
     else if (b.dataset.act === 'auto') autoPlace(selected);
     else if (b.dataset.act === 'remove') unplace(selected);
   });
@@ -1047,6 +1118,7 @@ function bindUI() {
     const step = e.shiftKey ? 1 : 0.125;
     switch (e.key) {
       case 'r': case 'R': rotateSelected(e.shiftKey ? -90 : 90); break;
+      case 'f': case 'F': flipSelected(e.shiftKey ? 'y' : 'x'); break;
       case 'ArrowLeft': nudgeSelected(-step, 0); break;
       case 'ArrowRight': nudgeSelected(step, 0); break;
       case 'ArrowUp': nudgeSelected(0, -step); break;
@@ -1082,7 +1154,7 @@ function layoutObject() {
   const placements = {};
   for (const p of PIECES) {
     const pl = state.placements[p.id];
-    if (pl) placements[p.id] = { slab: pl.slab, x: Math.round(pl.x * 16) / 16, y: Math.round(pl.y * 16) / 16, rot: pl.rot };
+    if (pl) placements[p.id] = { slab: pl.slab, x: Math.round(pl.x * 16) / 16, y: Math.round(pl.y * 16) / 16, rot: pl.rot, ...(pl.flip ? { flip: true } : {}) };
   }
   return {
     app: APP_ID, version: 1,
@@ -1140,7 +1212,7 @@ function sanitizePlacements(raw) {
   for (const [id, pl] of Object.entries(raw || {})) {
     const slab = Number(pl?.slab), x = Number(pl?.x), y = Number(pl?.y), rot = ((Number(pl?.rot) % 360) + 360) % 360;
     if (!PIECE[id] || !SLABS.includes(slab) || !isFinite(x) || !isFinite(y) || rot % 90) { skipped++; continue; }
-    placements[id] = { slab, x: round6(x), y: round6(y), rot };
+    placements[id] = { slab, x: round6(x), y: round6(y), rot, ...(pl.flip === true ? { flip: true } : {}) };
   }
   return { placements, skipped };
 }
@@ -1219,7 +1291,7 @@ async function exportSheet() {
   const tmp = document.createElement('canvas').getContext('2d');
   tmp.font = '400 22px "Familjen Grotesk"';
   const noteLines = state.notes.trim() ? wrapText(tmp, state.notes.trim(), SW - 40).slice(0, 6) : [];
-  const issueLines = issues.map(i => '⚠ ' + i.text).slice(0, 8);
+  const issueLines = [...issues.map(i => '⚠ ' + i.text), ...notices.map(n => '⇅ ' + n.text)].slice(0, 10);
   const headerH = 150 + noteLines.length * 30 + (noteLines.length ? 16 : 0);
 
   const slabBlock = 56 + R + SH;
@@ -1277,7 +1349,7 @@ async function exportSheet() {
     ctx.fillStyle = '#fbecea'; ctx.fillRect(ax, ay, rightW, issuesH - 20);
     ctx.fillStyle = DANGER; ctx.fillRect(ax, ay, 6, issuesH - 20);
     ctx.fillStyle = INK; ctx.font = '800 26px "Big Shoulders Display"'; ctx.textAlign = 'left';
-    ctx.fillText('WARNINGS', ax + 20, ay + 36);
+    ctx.fillText(issues.length ? 'WARNINGS' : 'NOTES', ax + 20, ay + 36);
     ctx.font = '400 18px "Familjen Grotesk"';
     issueLines.forEach((t, i) => ctx.fillText(t, ax + 20, ay + 68 + i * 30));
     ay += issuesH;

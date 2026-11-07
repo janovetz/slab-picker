@@ -9,6 +9,8 @@
 //             (defaults to the full w × h rectangle)
 //   poly    – outline polygon, clockwise (defaults to the w × h rectangle)
 //   cutouts – sink holes etc. {shape:'rect', x, y, w, h} or {shape:'circle', cx, cy, r}
+//   edge    – the wall/top edge as a polyline along the outline, in the same
+//             (clockwise) direction as poly (defaults to [[0, 0], [w, 0]])
 
 export const SLAB = {
   width: 122,
@@ -26,9 +28,11 @@ export const AREAS = [
     id: 'mudroom', name: 'Mudroom', color: '#ffe14d',
     pieces: [{
       id: 'mudroom', name: 'Mudroom', kind: 'counter', w: 60, h: 27.5,
-      // 15.5" deep, except the right-most 23" which is 27.5" deep
-      rects: [[0, 0, 60, 15.5], [37, 15.5, 23, 12]],
-      poly: [[0, 0], [60, 0], [60, 27.5], [37, 27.5], [37, 15.5], [0, 15.5]],
+      // Straight 60" front edge. The back (wall) edge steps around a corner:
+      // the left 37" is 15.5" deep, the right-most 23" is 27.5" deep.
+      rects: [[0, 12, 60, 15.5], [37, 0, 23, 12]],
+      poly: [[0, 12], [37, 12], [37, 0], [60, 0], [60, 27.5], [0, 27.5]],
+      edge: [[0, 12], [37, 12], [37, 0], [60, 0]],
     }],
   },
   {

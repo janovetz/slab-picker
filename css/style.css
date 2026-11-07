@@ -303,3 +303,5 @@ dialog textarea { font: 400 12px var(--mono); }
 
 .cutlist.drop-out { outline: 2px dashed var(--accent); outline-offset: 4px; }
 .cutlist.drop-out::before { content: 'Drop to return to the cut list'; display: block; font: 500 11px var(--mono); color: var(--accent-ink); text-transform: uppercase; letter-spacing: .08em; }
+.insp-note { margin: 2px 0 6px; padding: 6px 8px; font-size: 12px; color: var(--ink-2); background: #fff6df; border-left: 3px solid #e0a800; }
+.issues li.info.link { cursor: pointer; border-left-color: #e0a800; background: #fff6df; }
