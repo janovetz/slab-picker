@@ -81,6 +81,36 @@ button, input, textarea { font: inherit; color: inherit; }
 .topbar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .topbar button.primary:hover { background: #ff7140; border-color: #ff7140; }
 
+/* ---------- layout library bar (second row of the top bar) ---------- */
+.layoutbar {
+  flex: 0 0 calc(100% + 48px);
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  margin: 0 -24px -12px; padding: 8px 24px 9px;
+  background: #24221e;
+  border-top: 1px solid #35322c;
+}
+.lp-select { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lp-select span { font: 500 11px var(--mono); text-transform: uppercase; letter-spacing: .08em; color: #a9a397; }
+.lp-select select {
+  appearance: none; -webkit-appearance: none;
+  min-width: 240px; max-width: 380px;
+  padding: 6px 30px 6px 10px;
+  font: 600 14px var(--body); color: var(--paper-2);
+  background: #2f2c27 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23ff5a1f' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 11px center;
+  border: 1px solid #555046; border-radius: 2px;
+  text-overflow: ellipsis; cursor: pointer;
+}
+.lp-select select:hover { border-color: #8a8478; }
+.lp-select select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.lp-select option { color: var(--ink); background: var(--paper-2); }
+.lp-meta { font: 400 12px var(--mono); color: #a9a397; margin-right: auto; min-width: 0; }
+.topbar .lp-actions button { padding: 5px 10px; font-size: 13px; color: #d9d3c6; }
+#name-dialog input {
+  width: 100%; margin: 8px 0 4px; padding: 9px 10px;
+  border: 1px solid var(--rule-2); border-radius: 2px; background: #fff;
+  font: 500 16px var(--body);
+}
+
 /* ---------- layout ---------- */
 .layout {
   display: grid;
@@ -89,7 +119,7 @@ button, input, textarea { font: inherit; color: inherit; }
   padding: 22px 24px 48px;
   align-items: start;
 }
-.rail { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow-y: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.rail { display: flex; flex-direction: column; gap: 16px; position: sticky; top: calc(var(--topbar-h, 84px) + 16px); max-height: calc(100vh - var(--topbar-h, 84px) - 32px); overflow-y: auto; padding-bottom: 4px; scrollbar-width: thin; }
 
 .panel {
   background: var(--paper-2);
@@ -299,9 +329,14 @@ dialog textarea { font: 400 12px var(--mono); }
   .actions { gap: 8px; }
   .topbar button { padding: 6px 10px; font-size: 13px; }
   .slabs { order: -1; }
+  .layoutbar { flex-basis: calc(100% + 32px); margin: 0 -16px -10px; padding: 8px 16px; gap: 8px; }
+  .lp-select { flex: 1 1 100%; }
+  .lp-select select { flex: 1; min-width: 0; max-width: none; }
+  .lp-meta { flex-basis: 100%; }
 }
 
 .cutlist.drop-out { outline: 2px dashed var(--accent); outline-offset: 4px; }
 .cutlist.drop-out::before { content: 'Drop to return to the cut list'; display: block; font: 500 11px var(--mono); color: var(--accent-ink); text-transform: uppercase; letter-spacing: .08em; }
 .insp-note { margin: 2px 0 6px; padding: 6px 8px; font-size: 12px; color: var(--ink-2); background: #fff6df; border-left: 3px solid #e0a800; }
 .issues li.info.link { cursor: pointer; border-left-color: #e0a800; background: #fff6df; }
+.legend i.miter { width: 18px; height: 7px; background: rgba(255,159,28,.35); border: 1px dashed var(--ink-2); }

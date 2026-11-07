@@ -33,6 +33,19 @@
       </div>
       <button id="export" class="primary" title="Download a JPEG sheet with all slabs and areas">Export JPEG</button>
     </nav>
+    <div class="layoutbar">
+      <label class="lp-select">
+        <span>Layout</span>
+        <select id="layout-select" aria-label="Switch layout"></select>
+      </label>
+      <span id="layout-meta" class="lp-meta"></span>
+      <div class="btn-group lp-actions">
+        <button id="layout-new" title="Start a new, empty layout">New</button>
+        <button id="layout-dup" title="Copy this layout so you can try a variation">Duplicate</button>
+        <button id="layout-rename" title="Rename this layout">Rename</button>
+        <button id="layout-delete" title="Delete this layout from this browser">Delete</button>
+      </div>
+    </div>
   </header>
 
   <main class="layout">
@@ -76,12 +89,23 @@
   <dialog id="paste-dialog">
     <form method="dialog">
       <h2>Load a layout</h2>
-      <p class="hint">Paste the JSON someone sent you. Your current layout stays one Undo away.</p>
+      <p class="hint">Paste the JSON someone sent you. It’s added as a new layout; yours stay untouched.</p>
       <textarea id="paste-text" rows="12" spellcheck="false" placeholder='{ "app": "slab-happy", … }'></textarea>
       <p id="paste-error" class="error" hidden></p>
       <div class="dialog-actions">
         <button value="cancel" class="ghost">Cancel</button>
         <button id="paste-load" value="load" class="primary">Load layout</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="name-dialog">
+    <form method="dialog">
+      <h2 id="name-title">Name this layout</h2>
+      <input id="name-input" type="text" maxlength="60" autocomplete="off" spellcheck="false">
+      <div class="dialog-actions">
+        <button type="button" id="name-cancel" class="ghost">Cancel</button>
+        <button value="ok" class="primary">Save</button>
       </div>
     </form>
   </dialog>

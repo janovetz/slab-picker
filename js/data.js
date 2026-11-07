@@ -9,6 +9,9 @@
 //             (defaults to the full w × h rectangle)
 //   poly    – outline polygon, clockwise (defaults to the w × h rectangle)
 //   cutouts – sink holes etc. {shape:'rect', x, y, w, h} or {shape:'circle', cx, cy, r}
+//   miter   – default mitered drop edges for counters: { edges: ['front'|'left'|'right'], d: height }.
+//             Each drop is cut attached to that edge on the slab so the veins wrap over it.
+//             (Editable per layout in the app; these are just the starting values.)
 //   edge    – the wall/top edge as a polyline along the outline, in the same
 //             (clockwise) direction as poly (defaults to [[0, 0], [w, 0]])
 
@@ -22,7 +25,7 @@ export const SLAB = {
 export const AREAS = [
   {
     id: 'coffee', name: 'Coffee', color: '#ff9f1c',
-    pieces: [{ id: 'coffee', name: 'Coffee', kind: 'counter', w: 40, h: 25 }],
+    pieces: [{ id: 'coffee', name: 'Coffee', kind: 'counter', w: 40, h: 25, miter: { edges: ['front', 'left'], d: 2 } }],
   },
   {
     id: 'mudroom', name: 'Mudroom', color: '#ffe14d',
@@ -33,6 +36,7 @@ export const AREAS = [
       rects: [[0, 12, 60, 15.5], [37, 0, 23, 12]],
       poly: [[0, 12], [37, 12], [37, 0], [60, 0], [60, 27.5], [0, 27.5]],
       edge: [[0, 12], [37, 12], [37, 0], [60, 0]],
+      miter: { edges: ['front', 'left'], d: 2 },
     }],
   },
   {
@@ -42,6 +46,7 @@ export const AREAS = [
       {
         id: 'bar-counter', name: 'Bar counter', kind: 'counter', w: 66, h: 25,
         cutouts: [{ shape: 'rect', x: 10, y: 5, w: 15, h: 15 }], // 15" square sink, 10" from the left end
+        miter: { edges: ['front'], d: 2 },
       },
     ],
   },
@@ -53,7 +58,7 @@ export const AREAS = [
     id: 'cooktop', name: 'Cooktop', color: '#9dff4a',
     pieces: [
       { id: 'cooktop-splash', name: 'Cooktop backsplash', kind: 'splash', w: 68, h: 71 },
-      { id: 'cooktop-counter', name: 'Cooktop counter', kind: 'counter', w: 68, h: 25 },
+      { id: 'cooktop-counter', name: 'Cooktop counter', kind: 'counter', w: 68, h: 25, miter: { edges: ['front'], d: 2 } },
     ],
   },
   {
@@ -61,6 +66,7 @@ export const AREAS = [
     pieces: [{
       id: 'hall-bath', name: 'Hall bath', kind: 'counter', w: 53, h: 21,
       cutouts: [{ shape: 'circle', cx: 39, cy: 10.5, r: 7.5 }], // round sink, right side
+      miter: { edges: ['front', 'right'], d: 2 },
     }],
   },
   {
@@ -71,6 +77,7 @@ export const AREAS = [
         { shape: 'circle', cx: 24, cy: 12, r: 7.5 }, // left sink
         { shape: 'circle', cx: 77, cy: 12, r: 7.5 }, // right sink
       ],
+      miter: { edges: ['front'], d: 2 },
     }],
   },
 ];

@@ -2,7 +2,8 @@ import { SLAB, AREAS } from './data.js';
 
 // ============================================================ constants
 const APP_ID = 'slab-happy';
-const STORAGE_KEY = 'slab-happy:layout:v1';
+const LEGACY_KEY = 'slab-happy:layout:v1';   // single autosaved layout (pre-library); migrated once
+const LIBRARY_KEY = 'slab-happy:library:v1';
 const AUTHOR_KEY = 'slab-happy:author';
 const PREFS_KEY = 'slab-happy:prefs';
 const W = SLAB.width, H = SLAB.height;
@@ -10,6 +11,8 @@ const SLABS = Array.from({ length: SLAB.count }, (_, i) => i + 1); // 1-based
 const RULER = 28;
 const INK = '#1b1a17', PAPER = '#f6f3ec', ACCENT = '#ff5a1f', DANGER = '#ff2d3d';
 const EPS = 1e-6;
+const MITER_EDGES = ['front', 'left', 'right'];
+const MITER_DEFAULT_D = 2;
 
 const PIECES = [];
 const PIECE = {};
@@ -27,7 +30,7 @@ for (const area of AREAS) {
 }
 
 // ============================================================ state
-const state = { author: '', notes: '', settings: { gap: 0.5, margin: 0.5 }, placements: {} };
+const state = { author: '', notes: '', settings: { gap: 0.5, margin: 0.5 }, placements: {}, miters: defaultMiters() };
 const prefs = { dim: true };
 let selected = null;
 let hoverId = null;
@@ -45,12 +48,12 @@ const store = {
 };
 
 function layoutData() {
-  return { notes: state.notes, settings: { ...state.settings }, placements: structuredClone(state.placements) };
+  return { notes: state.notes, settings: { ...state.settings }, placements: structuredClone(state.placements), miters: structuredClone(state.miters) };
 }
 function snapshot() { return JSON.stringify(layoutData()); }
 function restore(s) {
   const o = JSON.parse(s);
-  state.notes = o.notes; state.settings = o.settings; state.placements = o.placements;
+  state.notes = o.notes; state.settings = o.settings; state.placements = o.placements; state.miters = cleanMiters(o.miters);
 }
 function pushUndo(snap = snapshot()) {
   undoStack.push(snap);
@@ -61,9 +64,209 @@ function mutate(fn) { pushUndo(); fn(); afterChange(); }
 function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); afterChange(); }
 function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); afterChange(); }
 
-function save() {
-  store.set(STORAGE_KEY, snapshot());
-  store.set(PREFS_KEY, JSON.stringify(prefs));
+function save() { commitActive(); }
+function savePrefs() { store.set(PREFS_KEY, JSON.stringify(prefs)); }
+
+// ============================================================ layout library (per browser)
+// { activeId, layouts: { [id]: { id, name, author, createdAt, updatedAt, basedOn?, source?, notes, settings, placements } } }
+// `source` ({layoutId, savedAt, author}) records where an imported layout came from, for de-duping re-imports.
+let library = { activeId: null, layouts: {} };
+
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const nowISO = () => new Date().toISOString();
+function cleanSettings(st) {
+  const num = (v, d) => (v !== null && v !== '' && isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
+  return { gap: num(st?.gap, 0.5), margin: num(st?.margin, 0.5) };
+}
+function cleanBasedOn(b) {
+  if (!b || typeof b !== 'object' || !(b.id || b.name)) return undefined;
+  return { id: String(b.id ?? ''), name: String(b.name ?? '').slice(0, 60), author: String(b.author ?? '').slice(0, 40) };
+}
+function cleanEntry(e) {
+  if (!e || typeof e !== 'object' || typeof e.id !== 'string' || !e.id) return null;
+  const out = {
+    id: e.id,
+    name: String(e.name || 'Untitled layout').slice(0, 60),
+    author: String(e.author || '').slice(0, 40),
+    createdAt: typeof e.createdAt === 'string' ? e.createdAt : nowISO(),
+    updatedAt: typeof e.updatedAt === 'string' ? e.updatedAt : nowISO(),
+    notes: typeof e.notes === 'string' ? e.notes : '',
+    settings: cleanSettings(e.settings),
+    placements: sanitizePlacements(e.placements).placements,
+    miters: cleanMiters(e.miters),
+  };
+  const bo = cleanBasedOn(e.basedOn);
+  if (bo) out.basedOn = bo;
+  if (e.source && typeof e.source === 'object') out.source = { layoutId: e.source.layoutId ?? null, savedAt: e.source.savedAt ?? null, author: String(e.source.author ?? '') };
+  return out;
+}
+function makeEntry({ name, author = state.author, notes = '', settings, placements = {}, miters, basedOn, source }) {
+  const t = nowISO();
+  const e = { id: newId(), name, author, createdAt: t, updatedAt: t, notes, settings: cleanSettings(settings), placements: structuredClone(placements), miters: cleanMiters(miters) };
+  if (basedOn) e.basedOn = basedOn;
+  if (source) e.source = source;
+  return e;
+}
+function readLibrary() {
+  try {
+    const o = JSON.parse(store.get(LIBRARY_KEY) || 'null');
+    if (!o || typeof o.layouts !== 'object' || !o.layouts) return null;
+    const layouts = {};
+    for (const e of Object.values(o.layouts)) { const c = cleanEntry(e); if (c) layouts[c.id] = c; }
+    return Object.keys(layouts).length ? { activeId: o.activeId, layouts } : null;
+  } catch { return null; }
+}
+function writeLibrary() { store.set(LIBRARY_KEY, JSON.stringify(library)); }
+const activeEntry = () => library.layouts[library.activeId];
+const sortedEntries = () => Object.values(library.layouts).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+const entryData = e => JSON.stringify({ notes: e.notes, settings: e.settings, placements: e.placements, miters: e.miters });
+const entryAuthor = e => e.author || state.author || 'you';
+
+function loadEntry(e) {
+  state.notes = e.notes;
+  state.settings = { ...e.settings };
+  state.placements = structuredClone(e.placements);
+  state.miters = cleanMiters(e.miters);
+}
+
+/** Write the working state into the active entry (bumping updatedAt only on real changes) and persist. */
+function commitActive() {
+  const e = activeEntry();
+  if (!e) return;
+  const data = layoutData();
+  if (entryData(e) !== JSON.stringify(data)) Object.assign(e, structuredClone(data), { updatedAt: nowISO() });
+  // merge with whatever another tab may have added meanwhile, keeping our copy of the active entry
+  const disk = readLibrary();
+  if (disk) library.layouts = { ...disk.layouts, [e.id]: e };
+  writeLibrary();
+}
+
+function activate(id) {
+  library.activeId = id;
+  loadEntry(library.layouts[id]);
+  undoStack.length = 0; redoStack.length = 0;
+  selected = null;
+  writeLibrary();
+  computeIssues();
+  updateUI();
+  requestRender();
+}
+function switchTo(id) {
+  if (!library.layouts[id] || id === library.activeId) return;
+  commitActive();
+  activate(id);
+}
+function addLayout(e) {
+  commitActive();
+  library.layouts[e.id] = e;
+  activate(e.id);
+}
+
+function loadLibrary() {
+  let lib = readLibrary();
+  if (!lib) {
+    // first run with the library: migrate the old single autosave (if any) into "My layout"
+    let old = null;
+    try { old = JSON.parse(store.get(LEGACY_KEY) || 'null'); } catch { /* ignore corrupt save */ }
+    const e = makeEntry({
+      name: 'My layout', author: state.author,
+      notes: typeof old?.notes === 'string' ? old.notes : '',
+      settings: old?.settings,
+      placements: old && typeof old.placements === 'object' ? sanitizePlacements(old.placements).placements : {},
+    });
+    lib = { activeId: e.id, layouts: { [e.id]: e } };
+    store.set(LIBRARY_KEY, JSON.stringify(lib));
+  }
+  if (!lib.layouts[lib.activeId]) lib.activeId = Object.values(lib.layouts).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0].id;
+  library = lib;
+  loadEntry(activeEntry());
+}
+
+function shortWhen(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+               : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+let pickerSig = '';
+function renderLayoutPicker() {
+  const sel = $('layout-select');
+  const entries = sortedEntries();
+  const sig = JSON.stringify([library.activeId, state.author, entries.map(e => [e.id, e.name, e.author])]);
+  if (sig !== pickerSig) {
+    pickerSig = sig;
+    sel.innerHTML = entries.map(e =>
+      `<option value="${esc(e.id)}"${e.id === library.activeId ? ' selected' : ''}>${esc(e.name)} — ${esc(entryAuthor(e))}</option>`).join('');
+  }
+  sel.value = library.activeId;
+  const e = activeEntry();
+  if (!e) return;
+  const bits = [`by ${esc(entryAuthor(e))}`, `edited ${esc(shortWhen(e.updatedAt))}`];
+  if (e.basedOn) bits.push(`based on ${e.basedOn.author ? esc(e.basedOn.author) + '’s ' : ''}“${esc(e.basedOn.name || 'a layout')}”`);
+  $('layout-meta').innerHTML = bits.join(' · ');
+  $('layout-meta').title = `${entries.length} layout${entries.length > 1 ? 's' : ''} saved in this browser`;
+  const del = $('layout-delete');
+  del.disabled = entries.length < 2;
+  del.title = del.disabled ? 'You need at least one layout' : 'Delete this layout from this browser';
+}
+
+function askName(title, initial) {
+  const d = $('name-dialog');
+  $('name-title').textContent = title;
+  const input = $('name-input');
+  input.value = initial;
+  d.returnValue = '';
+  d.showModal();
+  input.select();
+  return new Promise(resolve => {
+    d.addEventListener('close', () => {
+      const v = input.value.trim().slice(0, 60);
+      resolve(d.returnValue === 'ok' && v ? v : null);
+    }, { once: true });
+  });
+}
+
+function nextLayoutName(base) {
+  const names = new Set(Object.values(library.layouts).map(e => e.name));
+  if (!names.has(base)) return base;
+  for (let i = 2; ; i++) if (!names.has(`${base} ${i}`)) return `${base} ${i}`;
+}
+
+async function newLayout() {
+  const name = await askName('New layout', nextLayoutName('New layout'));
+  if (!name) return;
+  addLayout(makeEntry({ name, settings: state.settings }));
+  toast(`Started “${name}”. Your other layouts are in the Layout menu.`);
+}
+async function duplicateLayout() {
+  commitActive();
+  const src = activeEntry();
+  const name = await askName('Duplicate layout', nextLayoutName(`${src.name} (copy)`));
+  if (!name) return;
+  addLayout(makeEntry({
+    name, notes: src.notes, settings: src.settings, placements: src.placements, miters: src.miters,
+    basedOn: { id: src.id, name: src.name, author: entryAuthor(src) },
+  }));
+  toast(`Duplicated as “${name}”.`);
+}
+async function renameLayout() {
+  const e = activeEntry();
+  const name = await askName('Rename layout', e.name);
+  if (!name || name === e.name) return;
+  e.name = name;
+  commitActive();
+  updateUI();
+}
+function deleteLayout() {
+  const e = activeEntry();
+  if (Object.keys(library.layouts).length < 2) return;
+  if (!confirm(`Delete “${e.name}” from this browser? This can’t be undone.`)) return;
+  commitActive();
+  delete library.layouts[e.id];
+  activate(sortedEntries()[0].id);
+  toast(`Deleted “${e.name}”.`);
 }
 
 function afterChange() {
@@ -107,8 +310,65 @@ function parseIn(str) {
 const q8 = v => Math.round(v * 8) / 8;
 const round6 = v => Math.round(v * 1e6) / 1e6;
 
+// ============================================================ mitered drops
+// A mitered edge gets a drop strip (default 2″) cut from the slab directly against that edge, so the veins
+// wrap over it. The strip is part of the piece's footprint for placement, overlap and edge checks.
+function defaultMiters() {
+  const m = {};
+  for (const p of PIECES) if (p.kind === 'counter') m[p.id] = { edges: [...(p.miter?.edges ?? [])], d: p.miter?.d ?? MITER_DEFAULT_D };
+  return m;
+}
+function cleanMiters(raw) {
+  const out = defaultMiters();
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [id, v] of Object.entries(raw)) {
+    if (!out[id] || !v || typeof v !== 'object') continue;
+    const edges = Array.isArray(v.edges) ? MITER_EDGES.filter(e => v.edges.includes(e)) : out[id].edges;
+    const d = Number(v.d);
+    out[id] = { edges, d: isFinite(d) && d > 0 && d <= 12 ? round6(d) : out[id].d };
+  }
+  return out;
+}
+/** Extent [lo, hi] of the outline along a side ('front' = y = h, 'left' = x = 0, 'right' = x = w), or null. */
+function sideSpan(p, side) {
+  let lo = Infinity, hi = -Infinity;
+  const n = p.poly.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = p.poly[i], [x2, y2] = p.poly[(i + 1) % n];
+    const on = side === 'front' ? Math.abs(y1 - p.h) < EPS && Math.abs(y2 - p.h) < EPS
+      : side === 'left' ? Math.abs(x1) < EPS && Math.abs(x2) < EPS
+      : Math.abs(x1 - p.w) < EPS && Math.abs(x2 - p.w) < EPS;
+    if (!on) continue;
+    const [a, b] = side === 'front' ? [x1, x2] : [y1, y2];
+    lo = Math.min(lo, a, b); hi = Math.max(hi, a, b);
+  }
+  return hi > lo ? [lo, hi] : null;
+}
+/** Drop strips in piece-local coords: [{ side, d, rect: [x, y, w, h] }]. */
+function drops(p) {
+  const m = state.miters?.[p.id];
+  if (!m?.edges.length) return [];
+  return m.edges.map(side => {
+    const sp = sideSpan(p, side);
+    if (!sp) return null;
+    const [a, b] = sp, d = m.d;
+    const rect = side === 'front' ? [a, p.h, b - a, d] : side === 'left' ? [-d, a, d, b - a] : [p.w, a, d, b - a];
+    return { side, d, rect };
+  }).filter(Boolean);
+}
+/** Local bounding box of the piece plus its drops. */
+function footprint(p) {
+  let x0 = 0, y0 = 0, x1 = p.w, y1 = p.h;
+  for (const { rect: [x, y, w, h] } of drops(p)) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
+  return { x0, y0, w: x1 - x0, h: y1 - y0 };
+}
+const allRects = p => [...p.rects, ...drops(p).map(d => d.rect)];
+const rectPoly = ([x, y, w, h]) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+const miterText = p => { const m = state.miters?.[p.id]; return m?.edges.length ? `${fmt(m.d)} miter: ${m.edges.join(' + ')}` : ''; };
+
 // ============================================================ geometry
-function bboxSize(p, rot) { return rot % 180 === 0 ? [p.w, p.h] : [p.h, p.w]; }
+/** Size of the placed footprint (piece + drops) on the slab. */
+function bboxSize(p, rot) { const f = footprint(p); return rot % 180 === 0 ? [f.w, f.h] : [f.h, f.w]; }
 
 /**
  * Matrix mapping piece-local inches → slab inches.
@@ -116,21 +376,26 @@ function bboxSize(p, rot) { return rot % 180 === 0 ? [p.w, p.h] : [p.h, p.w]; }
  * The stone itself is never mirrored; only the outline/cutouts are.
  */
 function localToSlab(p, pl) {
-  const [tx, ty] = { 0: [0, 0], 90: [p.h, 0], 180: [p.w, p.h], 270: [0, p.w] }[pl.rot];
-  const m = new DOMMatrix().translate(pl.x + tx, pl.y + ty).rotate(pl.rot);
-  return pl.flip ? m.translate(0, p.h).scale(1, -1) : m;
+  // pl.x / pl.y is the top-left of the whole footprint (piece + mitered drops) on the slab
+  const f = footprint(p);
+  const [tx, ty] = { 0: [0, 0], 90: [f.h, 0], 180: [f.w, f.h], 270: [0, f.w] }[pl.rot];
+  let m = new DOMMatrix().translate(pl.x + tx, pl.y + ty).rotate(pl.rot);
+  if (pl.flip) m = m.translate(0, f.h).scale(1, -1);
+  return m.translate(-f.x0, -f.y0);
 }
 
 /** Slab-space polygon in px, always clockwise (reflections reverse winding). */
-function slabPoly(p, pl, s) {
+function slabPoly(p, pl, s, local = p.poly) {
   const m = localToSlab(p, pl);
-  const pts = p.poly.map(([x, y]) => { const q = m.transformPoint({ x, y }); return [q.x * s, q.y * s]; });
+  const pts = local.map(([x, y]) => { const q = m.transformPoint({ x, y }); return [q.x * s, q.y * s]; });
   return pl.flip ? pts.reverse() : pts;
 }
+/** Outline + drop polygons in slab px, all clockwise (for cut-outs from the offcut shading). */
+const slabHoles = (p, pl, s) => [slabPoly(p, pl, s), ...drops(p).map(d => slabPoly(p, pl, s, rectPoly(d.rect)))];
 
 function slabRects(p, pl) {
   const m = localToSlab(p, pl);
-  return p.rects.map(([x, y, w, h]) => {
+  return allRects(p).map(([x, y, w, h]) => {
     const a = m.transformPoint({ x, y }), b = m.transformPoint({ x: x + w, y: y + h });
     return { x: round6(Math.min(a.x, b.x)), y: round6(Math.min(a.y, b.y)), w: round6(Math.abs(b.x - a.x)), h: round6(Math.abs(b.y - a.y)) };
   });
@@ -281,6 +546,20 @@ function flipSelected(axis) {
   });
 }
 
+/** Change a piece's miter settings; if it's placed, keep the counter itself where it is. */
+function changeMiter(id, fn) {
+  if (!state.miters[id]) return;
+  mutate(() => {
+    const p = PIECE[id], pl = state.placements[id];
+    const before = pl && localToSlab(p, pl).transformPoint({ x: 0, y: 0 });
+    fn(state.miters[id]);
+    if (pl) {
+      const after = localToSlab(p, pl).transformPoint({ x: 0, y: 0 });
+      pl.x = round6(pl.x + before.x - after.x); pl.y = round6(pl.y + before.y - after.y);
+    }
+  });
+}
+
 function nudgeSelected(dx, dy) {
   const pl = state.placements[selected];
   if (!pl) return;
@@ -416,6 +695,7 @@ function drawPiece(ctx, p, pl, s, f) {
 
   if (f.ghost) {
     ctx.beginPath(); pathPoly(ctx, poly);
+    for (const d of drops(p)) pathPoly(ctx, rectPoly(d.rect).map(([x, y]) => T(x, y)));
     ctx.fillStyle = hexA(p.area.color, 0.25); ctx.fill();
     ctx.setLineDash([6, 4]); ctx.lineWidth = 2; ctx.strokeStyle = p.area.color; ctx.stroke();
     ctx.restore();
@@ -439,6 +719,31 @@ function drawPiece(ctx, p, pl, s, f) {
     }
     ctx.fillStyle = 'rgba(14,13,12,.62)'; ctx.fill();
     ctx.setLineDash([4, 3]); ctx.lineWidth = 1.25; ctx.strokeStyle = color; ctx.stroke(); ctx.setLineDash([]);
+  }
+
+  // mitered drop strips: tinted, dashed, labeled along their length
+  for (const d of drops(p)) {
+    const [x, y, w, h] = d.rect;
+    const dp = rectPoly(d.rect).map(([u, v]) => T(u, v));
+    ctx.beginPath(); pathPoly(ctx, dp);
+    ctx.fillStyle = hexA(p.area.color, 0.22); ctx.fill();
+    ctx.strokeStyle = 'rgba(10,9,8,.7)'; ctx.lineWidth = 3 * k; ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = 1.25 * k; ctx.setLineDash([4 * k, 3 * k]); ctx.stroke(); ctx.setLineDash([]);
+    const thin = Math.min(w, h) * s;
+    if (thin >= 9) {
+      const along = w >= h;
+      const a = along ? T(x, y + h / 2) : T(x + w / 2, y), b = along ? T(x + w, y + h / 2) : T(x + w / 2, y + h);
+      let ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      if (ang > Math.PI / 2 + 0.01 || ang < -Math.PI / 2 - 0.01) ang += Math.PI;
+      const [cx, cy] = T(x + w / 2, y + h / 2);
+      const mfs = Math.min(thin * 0.72, 11 * k);
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(ang);
+      ctx.font = `500 ${mfs}px "DM Mono"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const label = `${fmtN(d.d)}″ MITER`;
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.strokeText(label, 0, 0);
+      ctx.fillStyle = color; ctx.fillText(label, 0, 0);
+      ctx.restore();
+    }
   }
 
   // outline: dark halo, then crayon color
@@ -478,6 +783,7 @@ function drawPiece(ctx, p, pl, s, f) {
   const [lux, luy] = labelSpot(p);
   const [lx, ly] = T(lux, luy);
   const lines = [(f.flagged ? '⚠ ' : '') + p.name, `${fmtN(p.w)} × ${fmtN(p.h)}`];
+  if (f.coords && miterText(p)) lines.push(miterText(p));
   if (f.coords) lines.push(`@ ${fmt(pl.x)}, ${fmt(pl.y)}${pl.rot ? ` · ${pl.rot}°` : ''}${pl.flip ? ' · mirrored' : ''}`);
   else if (pl.flip) lines[1] += ' · mirrored';
   drawPill(ctx, lx, ly, lines, p.area.color, INK, labelFont(s));
@@ -518,7 +824,7 @@ function drawSlab(ctx, slab, o) {
     ctx.beginPath(); ctx.rect(0, 0, SW, SH); ctx.clip();
     ctx.beginPath();
     ctx.moveTo(0, 0); ctx.lineTo(0, SH); ctx.lineTo(SW, SH); ctx.lineTo(SW, 0); ctx.closePath(); // CCW
-    for (const [id, pl] of here) pathPoly(ctx, slabPoly(PIECE[id], pl, s)); // CW → hole
+    for (const [id, pl] of here) for (const poly of slabHoles(PIECE[id], pl, s)) pathPoly(ctx, poly); // CW → hole
     ctx.fillStyle = 'rgba(16,15,13,.5)';
     ctx.fill('nonzero');
     ctx.restore();
@@ -555,11 +861,26 @@ function drawSlab(ctx, slab, o) {
   ctx.restore();
 }
 
-/** Stack an area's pieces as installed: backsplash/panels above the counter. */
+/** Drop strips in installed (as-viewed, wall on top) coords: mirrored left↔right when the piece is flipped. */
+function installedDrops(p) {
+  const mir = !!state.placements[p.id]?.flip;
+  return drops(p).map(d => { const [x, y, w, h] = d.rect; return { ...d, rect: [mir ? p.w - x - w : x, y, w, h] }; });
+}
+
+/**
+ * Stack an area's pieces as installed: backsplash/panels above the counter, mitered drops unfolded
+ * against their edges (so you see the veins wrap). `x` of each item is where its body starts.
+ */
 function areaStack(area) {
   const order = [...area.pieces].sort((a, b) => (a.kind === 'counter') - (b.kind === 'counter'));
+  const ext = order.map(p => {
+    let x0 = 0, x1 = p.w, y1 = p.h;
+    for (const { rect: [x, y, w, h] } of installedDrops(p)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
+    return { x0, x1, y1 };
+  });
+  const xOff = Math.max(0, ...ext.map(e => -e.x0));
   let y = 0, w = 0;
-  const items = order.map(p => { const it = { p, x: 0, y }; y += p.h; w = Math.max(w, p.w); return it; });
+  const items = order.map((p, i) => { const it = { p, x: xOff, y }; y += ext[i].y1; w = Math.max(w, xOff + ext[i].x1); return it; });
   return { items, w, h: y };
 }
 
@@ -576,20 +897,30 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
     const poly = p.poly.map(([x, y]) => [px + mx(x) * s, py + y * s]);
     boxes.push({ id: p.id, x: px, y: py, w: p.w * s, h: p.h * s });
 
-    ctx.save();
-    ctx.beginPath(); pathPoly(ctx, poly);
-    if (pl) {
-      ctx.clip();
-      // installed → slab = localToSlab · G, where G mirrors x when flipped; the product is a pure rotation
-      const toSlab = mir ? localToSlab(p, pl).translate(p.w, 0).scale(-1, 1) : localToSlab(p, pl);
-      const inv = toSlab.inverse();
-      ctx.setTransform(base.multiply(new DOMMatrix().translate(px, py).scale(s).multiply(inv)));
-      ctx.drawImage(img, 0, 0, W, H);
-      ctx.setTransform(base);
-    } else {
-      ctx.fillStyle = hatchPattern(ctx); ctx.fill();
+    // installed → slab = localToSlab · G, where G mirrors x when flipped; the product is a pure rotation
+    const toSlab = pl && (mir ? localToSlab(p, pl).translate(p.w, 0).scale(-1, 1) : localToSlab(p, pl));
+    const fillStone = pts => {
+      ctx.save();
+      ctx.beginPath(); pathPoly(ctx, pts);
+      if (pl) {
+        ctx.clip();
+        ctx.setTransform(base.multiply(new DOMMatrix().translate(px, py).scale(s).multiply(toSlab.inverse())));
+        ctx.drawImage(img, 0, 0, W, H);
+        ctx.setTransform(base);
+      } else {
+        ctx.fillStyle = hatchPattern(ctx); ctx.fill();
+      }
+      ctx.restore();
+    };
+    fillStone(poly);
+
+    // mitered drops, unfolded against their edges: same stone mapping, so veins continue across the fold
+    for (const d of installedDrops(p)) {
+      const dp = rectPoly(d.rect).map(([x, y]) => [px + x * s, py + y * s]);
+      fillStone(dp);
+      ctx.beginPath(); pathPoly(ctx, dp);
+      ctx.lineWidth = 1; ctx.strokeStyle = INK; ctx.setLineDash([3, 2]); ctx.stroke(); ctx.setLineDash([]);
     }
-    ctx.restore();
 
     for (const c of p.cutouts) {
       ctx.beginPath();
@@ -620,9 +951,11 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
     const [lux, luy] = labelSpot(p);
     const cx = px + mx(lux) * s, cy = py + luy * s;
     if (!pl) {
-      ctx.font = `500 ${fs}px "DM Mono"`; ctx.fillStyle = '#857f74';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(`${p.kind === 'splash' ? 'backsplash' : p.kind} · not placed`, cx, cy);
+      ctx.font = `500 ${fs}px "DM Mono"`;
+      const t = 'not placed', tw = ctx.measureText(t).width + fs;
+      ctx.fillStyle = PAPER; ctx.fillRect(cx - tw / 2, cy - fs * 0.8, tw, fs * 1.6);
+      ctx.fillStyle = '#857f74'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(t, cx, cy + 0.5);
     } else if (o.tags) {
       const t = `S${pl.slab}${pl.rot ? ` · ${pl.rot}°` : ''}${pl.flip ? ' · mirrored' : ''}${flagged.has(p.id) ? ' · ⚠' : ''}`;
       ctx.font = `500 ${fs}px "DM Mono"`;
@@ -869,6 +1202,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function updateUI() {
+  renderLayoutPicker();
   renderCutlist();
   renderIssues();
   renderInspector();
@@ -900,7 +1234,7 @@ function renderCutlist() {
         return `<div class="piece-row ${pl ? '' : 'unplaced'} ${p.id === selected ? 'selected' : ''}" draggable="true" data-id="${p.id}">
           <span class="swatch" style="background:${area.color}"></span>
           <div><div class="piece-name">${esc(p.name.replace(area.name + ' ', '').replace(/^./, c => c.toUpperCase()))}</div>
-          <div class="piece-dims">${fmt(p.w)} × ${fmt(p.h)}${p.cutouts.length ? ` · ${p.cutouts.length} cutout${p.cutouts.length > 1 ? 's' : ''}` : ''}</div></div>
+          <div class="piece-dims">${fmt(p.w)} × ${fmt(p.h)}${p.cutouts.length ? ` · ${p.cutouts.length} cutout${p.cutouts.length > 1 ? 's' : ''}` : ''}${miterText(p) ? `<br>${miterText(p)}` : ''}</div></div>
           ${status}
         </div>`;
       }).join('')}
@@ -921,7 +1255,7 @@ function renderIssues() {
 function renderSlabStats() {
   for (const v of views) {
     const here = placedOn(v.slab);
-    const used = here.reduce((sum, [id]) => sum + PIECE[id].rects.reduce((a, r) => a + r[2] * r[3], 0), 0);
+    const used = here.reduce((sum, [id]) => sum + allRects(PIECE[id]).reduce((a, r) => a + r[2] * r[3], 0), 0);
     const pct = Math.round(used / (W * H) * 100);
     v.card.querySelector('[data-k=pieces]').textContent = here.length;
     v.card.querySelector('[data-k=used]').textContent = `${pct}% · ${(used / 144).toFixed(1)} ft²`;
@@ -962,6 +1296,11 @@ function renderInspector() {
     <div class="field"><span>Slab</span><div class="seg">
       ${SLABS.map(s => `<button data-slab="${s}" class="${pl?.slab === s ? 'on' : ''}">${s}</button>`).join('')}
     </div></div>
+    ${state.miters[p.id] ? `
+    <div class="field"><span>Miter edges</span><div class="seg multi">
+      ${MITER_EDGES.filter(e => sideSpan(p, e)).map(e => `<button data-miter="${e}" class="${state.miters[p.id].edges.includes(e) ? 'on' : ''}" title="Toggle a mitered drop on the ${e} edge">${e[0].toUpperCase() + e.slice(1)}</button>`).join('')}
+    </div></div>
+    <div class="field"><span>Drop height</span><div class="xy"><label><input data-miter-d value="${fmt(state.miters[p.id].d)}"></label></div></div>` : ''}
     ${pl ? `
     <div class="field"><span>From edge</span><div class="xy">
       <label>L <input data-xy="x" value="${fmt(pl.x)}"></label>
@@ -1040,10 +1379,22 @@ function bindUI() {
       autoPlace(selected, [slab]);
     } else if (b.dataset.rot) rotateSelected(+b.dataset.rot);
     else if (b.dataset.flip) flipSelected(b.dataset.flip);
+    else if (b.dataset.miter) {
+      const edge = b.dataset.miter;
+      changeMiter(selected, m => { m.edges = m.edges.includes(edge) ? m.edges.filter(x => x !== edge) : MITER_EDGES.filter(x => x === edge || m.edges.includes(x)); });
+    }
     else if (b.dataset.act === 'auto') autoPlace(selected);
     else if (b.dataset.act === 'remove') unplace(selected);
   });
   insp.addEventListener('change', e => {
+    if ('miterD' in e.target.dataset) {
+      const v = parseIn(e.target.value);
+      const m = state.miters[selected];
+      if (!m) return;
+      if (isNaN(v) || v <= 0 || v > 12) { e.target.value = fmt(m.d); return; }
+      changeMiter(selected, mm => { mm.d = round6(v); });
+      return;
+    }
     const k = e.target.dataset.xy;
     const pl = state.placements[selected];
     if (!k || !pl) return;
@@ -1051,7 +1402,7 @@ function bindUI() {
     if (isNaN(v)) { e.target.value = fmt(pl[k]); return; }
     mutate(() => { pl[k] = round6(v); });
   });
-  insp.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.dataset.xy) e.target.blur(); });
+  insp.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.target.dataset.xy || 'miterD' in e.target.dataset)) e.target.blur(); });
 
   // settings
   for (const k of ['gap', 'margin']) {
@@ -1061,7 +1412,7 @@ function bindUI() {
       mutate(() => { state.settings[k] = round6(v); });
     });
   }
-  $('set-dim').addEventListener('change', e => { prefs.dim = e.target.checked; save(); requestRender(); });
+  $('set-dim').addEventListener('change', e => { prefs.dim = e.target.checked; savePrefs(); requestRender(); });
 
   // notes: one undo step per editing session
   let notesBefore = null;
@@ -1075,7 +1426,23 @@ function bindUI() {
   // author
   const author = $('author');
   author.value = state.author;
-  author.addEventListener('input', () => { state.author = author.value.trim(); store.set(AUTHOR_KEY, state.author); });
+  author.addEventListener('input', () => { state.author = author.value.trim(); store.set(AUTHOR_KEY, state.author); renderLayoutPicker(); });
+
+  // layout library
+  $('layout-select').addEventListener('change', e => switchTo(e.target.value));
+  $('layout-new').addEventListener('click', newLayout);
+  $('layout-dup').addEventListener('click', duplicateLayout);
+  $('layout-rename').addEventListener('click', renameLayout);
+  $('layout-delete').addEventListener('click', deleteLayout);
+  $('name-cancel').addEventListener('click', () => $('name-dialog').close('cancel'));
+  window.addEventListener('storage', e => {
+    if (e.key !== LIBRARY_KEY) return;
+    const disk = readLibrary();
+    if (!disk) return;
+    const cur = activeEntry();
+    library.layouts = cur ? { ...disk.layouts, [cur.id]: cur } : disk.layouts;
+    renderLayoutPicker();
+  });
 
   // top bar
   $('undo').addEventListener('click', undo);
@@ -1108,7 +1475,7 @@ function bindUI() {
   // keyboard
   document.addEventListener('keydown', e => {
     const t = e.target;
-    if (t.closest?.('input, textarea, dialog')) return;
+    if (t.closest?.('input, textarea, select, dialog')) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
@@ -1145,6 +1512,8 @@ function bindUI() {
     if (err) toast(err);
   });
 
+  const topbar = document.querySelector('.topbar');
+  new ResizeObserver(() => document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px')).observe(topbar);
   new ResizeObserver(relayout).observe($('slabs'));
   new ResizeObserver(() => { layoutPreviews(); requestRender(); }).observe($('previews'));
 }
@@ -1156,13 +1525,20 @@ function layoutObject() {
     const pl = state.placements[p.id];
     if (pl) placements[p.id] = { slab: pl.slab, x: Math.round(pl.x * 16) / 16, y: Math.round(pl.y * 16) / 16, rot: pl.rot, ...(pl.flip ? { flip: true } : {}) };
   }
+  commitActive();
+  const e = activeEntry();
   return {
     app: APP_ID, version: 1,
+    layoutId: e.id,
+    name: e.name,
+    ...(e.basedOn ? { basedOn: e.basedOn } : {}),
     author: state.author || 'anonymous',
-    savedAt: new Date().toISOString(),
+    // last-edit time, so re-sending an unchanged layout de-dupes on the other end
+    savedAt: e.updatedAt,
     settings: { ...state.settings },
     notes: state.notes,
     placements,
+    miters: structuredClone(state.miters),
   };
 }
 const layoutJSON = () => JSON.stringify(layoutObject(), null, 2);
@@ -1200,7 +1576,7 @@ function openPasteDialog(prefill = '', isCopy = false) {
   d.querySelector('h2').textContent = isCopy ? 'Copy this' : 'Load a layout';
   d.querySelector('.hint').textContent = isCopy
     ? 'Your browser blocked clipboard access. Select all and copy it manually.'
-    : 'Paste the JSON someone sent you. Your current layout stays one Undo away.';
+    : 'Paste the JSON someone sent you. It’s added as a new layout; yours stay untouched.';
   $('paste-load').hidden = isCopy;
   d.showModal();
   if (isCopy) $('paste-text').select(); else $('paste-text').focus();
@@ -1225,16 +1601,40 @@ function importLayout(text, source) {
     return 'That JSON isn’t a Slab Happy layout.';
   }
   const { placements, skipped } = sanitizePlacements(o.placements);
-  const num = (v, d) => (isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
-  mutate(() => {
-    state.placements = placements;
-    if (o.settings) state.settings = { gap: num(o.settings.gap, 0.5), margin: num(o.settings.margin, 0.5) };
-    state.notes = typeof o.notes === 'string' ? o.notes : '';
-  });
-  select(null);
-  const who = typeof o.author === 'string' && o.author ? o.author : 'someone';
-  const when = o.savedAt ? new Date(o.savedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
-  toast(`Loaded ${who}’s layout${when ? ` (${when})` : ''}${skipped ? `, skipped ${skipped} unknown piece${skipped > 1 ? 's' : ''}` : ''}. ⌘Z brings yours back.`, 6000);
+  const data = { notes: typeof o.notes === 'string' ? o.notes : '', settings: cleanSettings(o.settings), placements, miters: cleanMiters(o.miters) };
+  const layoutId = typeof o.layoutId === 'string' && o.layoutId ? o.layoutId : null;
+  const savedAt = typeof o.savedAt === 'string' && o.savedAt ? o.savedAt : null;
+  const author = typeof o.author === 'string' && o.author && o.author !== 'anonymous' ? o.author.slice(0, 40) : '';
+  const who = author || 'someone';
+
+  // Same layout version received before? Just switch to it.
+  if (layoutId && savedAt) {
+    const dup = Object.values(library.layouts).find(e => e.source?.layoutId === layoutId && e.source?.savedAt === savedAt);
+    if (dup) {
+      switchTo(dup.id);
+      toast(`You already have “${dup.name}” from ${who}. Switched to it.`, 5000);
+      return null;
+    }
+  }
+  // One of your own layouts coming back unchanged? Switch to it.
+  const mine = layoutId && library.layouts[layoutId];
+  if (mine && entryData(mine) === JSON.stringify(data)) {
+    switchTo(mine.id);
+    toast(`That’s your own “${mine.name}”, unchanged. Switched to it.`, 5000);
+    return null;
+  }
+
+  const when = savedAt ? new Date(savedAt) : new Date();
+  const whenText = isNaN(when) ? '' : when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const name = typeof o.name === 'string' && o.name.trim()
+    ? o.name.trim().slice(0, 60)
+    : `${author || 'Someone'}’s layout${whenText ? ` · ${whenText}` : ''}`;
+  addLayout(makeEntry({
+    name, author, ...data,
+    basedOn: cleanBasedOn(o.basedOn),
+    source: layoutId || savedAt ? { layoutId, savedAt, author } : undefined,
+  }));
+  toast(`Added “${name}” from ${who}${skipped ? ` (skipped ${skipped} unknown piece${skipped > 1 ? 's' : ''})` : ''}. Your other layouts are in the Layout menu.`, 6500);
   return null;
 }
 
@@ -1275,17 +1675,19 @@ function drawSheetFrame(ctx, w, h) {
 }
 
 function headerLines() {
+  commitActive();
+  const name = activeEntry().name;
   const who = state.author || 'anonymous';
   const when = new Date().toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   const placed = PIECES.filter(p => state.placements[p.id]).length;
-  return { who, when, placed };
+  return { name, who, when, placed };
 }
 
 async function exportSheet() {
   await document.fonts.ready;
   const S = 13, R = 34, PAD = 64;
   const SW = W * S, SH = H * S;
-  const { who, when, placed } = headerLines();
+  const { name, who, when, placed } = headerLines();
 
   // measure header
   const tmp = document.createElement('canvas').getContext('2d');
@@ -1315,10 +1717,13 @@ async function exportSheet() {
   // header
   let y = PAD + 8;
   ctx.fillStyle = INK; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-  ctx.font = '800 64px "Big Shoulders Display"';
-  ctx.fillText('SLAB HAPPY · LAYOUT', PAD, y);
+  let tfs = 64;
+  const title = name.toUpperCase();
+  do { ctx.font = `800 ${tfs}px "Big Shoulders Display"`; } while (ctx.measureText(title).width > SW - 20 && --tfs > 30);
+  ctx.fillText(title, PAD, y + (64 - tfs) * 0.6);
   ctx.font = '500 26px "Familjen Grotesk"';
-  ctx.fillText(`by ${who}  ·  ${when}`, PAD, y + 76);
+  const bo = activeEntry().basedOn;
+  ctx.fillText(`Slab Happy layout  ·  by ${who}  ·  ${when}${bo ? `  ·  based on ${bo.author ? bo.author + '’s ' : ''}“${bo.name}”` : ''}`, PAD, y + 76);
   ctx.font = '400 20px "DM Mono"'; ctx.fillStyle = '#4a463f';
   ctx.fillText(`${placed}/${PIECES.length} pieces placed · min gap ${fmt(state.settings.gap)} · edge margin ${fmt(state.settings.margin)} · ${issues.length ? issues.length + ' warning' + (issues.length > 1 ? 's' : '') : 'no warnings'}`, PAD, y + 112);
   ctx.font = '400 22px "Familjen Grotesk"'; ctx.fillStyle = INK;
@@ -1326,8 +1731,9 @@ async function exportSheet() {
   // legend at top right
   const lx = width - PAD - rightW;
   ctx.font = '400 19px "Familjen Grotesk"'; ctx.fillStyle = '#4a463f';
-  ctx.fillText('Thick colored edge = wall side (counters) / top (backsplashes, panels).', lx, y + 80);
-  ctx.fillText('Dark dashed shapes = sink cutouts. Positions are from slab top-left.', lx, y + 108);
+  ctx.fillText('Thick colored edge = wall side (counters) / top (backsplashes, panels).', lx, y + 50);
+  ctx.fillText('Dark dashed shapes = sink cutouts. Positions are from slab top-left.', lx, y + 76);
+  ctx.fillText('Dashed strips on an edge = mitered drop, cut attached so the veins wrap.', lx, y + 102);
 
   // slabs
   const top = PAD + headerH;
@@ -1374,14 +1780,14 @@ async function exportSheet() {
     ay += st.h * ps + areaGap;
   }
 
-  download(c, `slab-layout-${slug(state.author)}-${stamp()}.jpg`);
+  download(c, `slab-layout-${slug(name)}-${slug(state.author)}-${stamp()}.jpg`);
   toast('Exported the layout sheet.');
 }
 
 async function exportSlab(slab) {
   await document.fonts.ready;
   const S = 24, R = 44, PAD = 60;
-  const { who, when } = headerLines();
+  const { name, who, when } = headerLines();
   const width = PAD * 2 + R + W * S, height = PAD * 2 + 110 + R + H * S;
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
@@ -1391,9 +1797,9 @@ async function exportSlab(slab) {
   ctx.font = '800 60px "Big Shoulders Display"';
   ctx.fillText(`SLAB ${slab} / ${SLAB.count}`, PAD, PAD + 56);
   ctx.font = '500 26px "Familjen Grotesk"';
-  ctx.fillText(`Slab Happy · by ${who} · ${when}`, PAD + 330, PAD + 50);
+  ctx.fillText(`${name} · by ${who} · ${when}`, PAD + 330, PAD + 50);
   drawSlab(ctx, slab, { scale: S, ox: PAD + R, oy: PAD + 110 + R, src: img, rulers: true, dim: prefs.dim, coords: true });
-  download(c, `slab-${slab}-${slug(state.author)}-${stamp()}.jpg`);
+  download(c, `slab-${slab}-${slug(name)}-${slug(state.author)}-${stamp()}.jpg`);
   toast(`Exported Slab ${slab}.`);
 }
 
@@ -1411,17 +1817,7 @@ function toast(msg, ms = 3500) {
 function loadSaved() {
   state.author = store.get(AUTHOR_KEY) || '';
   try { Object.assign(prefs, JSON.parse(store.get(PREFS_KEY) || '{}')); } catch { /* ignore */ }
-  const saved = store.get(STORAGE_KEY);
-  if (saved) {
-    try {
-      const o = JSON.parse(saved);
-      if (o && typeof o.placements === 'object') {
-        state.placements = sanitizePlacements(o.placements).placements;
-        if (o.settings) state.settings = { ...state.settings, ...o.settings };
-        if (typeof o.notes === 'string') state.notes = o.notes;
-      }
-    } catch { /* ignore corrupt save */ }
-  }
+  loadLibrary();
 }
 
 async function boot() {
@@ -1443,7 +1839,7 @@ async function boot() {
   }
   const legend = document.createElement('div');
   legend.className = 'legend';
-  legend.innerHTML = `<span><i></i>Thick edge = wall side (counters) / top (backsplashes, panels)</span><span><i class="cut"></i>Sink cutout</span><span>Distances shown are from the slab edges</span>`;
+  legend.innerHTML = `<span><i></i>Thick edge = wall side (counters) / top (backsplashes, panels)</span><span><i class="cut"></i>Sink cutout</span><span><i class="miter"></i>Mitered drop (cut attached to its edge)</span><span>Distances shown are from the slab edges</span>`;
   root.appendChild(legend);
 
   buildPreviews();
@@ -1452,14 +1848,18 @@ async function boot() {
   updateUI();
   relayout();
 
-  // shared link?
+  // shared link? (also when a link is pasted into a tab that already has the app open)
+  importFromHash();
+  window.addEventListener('hashchange', importFromHash);
+}
+
+function importFromHash() {
   const m = location.hash.match(/layout=([A-Za-z0-9_-]+)/);
-  if (m) {
-    let err;
-    try { err = importLayout(b64urlDecode(m[1]), 'link'); } catch { err = 'That link’s layout couldn’t be read.'; }
-    if (err) toast(err);
-    history.replaceState(null, '', location.pathname + location.search);
-  }
+  if (!m) return;
+  let err;
+  try { err = importLayout(b64urlDecode(m[1]), 'link'); } catch { err = 'That link’s layout couldn’t be read.'; }
+  if (err) toast(err);
+  history.replaceState(null, '', location.pathname + location.search);
 }
 
 boot();

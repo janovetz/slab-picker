@@ -7,16 +7,20 @@ Live site: https://janovetz.github.io/slab-picker/
 ## Using it
 
 - **Your name** (top bar) is stamped on everything you share or export.
+- **Layouts:** keep as many named layouts as you like in your browser. Use the **Layout** menu to switch between them, and **New**, **Duplicate**, **Rename** and **Delete** to manage them. Duplicate a layout to try a variation without losing the original. Each layout has its own placements, notes and settings, and everything autosaves.
 - **Place pieces:** drag a piece from the cut list onto a slab, or press **Auto** to put it in the first free spot. On a slab you can drag pieces (they snap to edges and gaps; hold ⌥ to move freely), rotate them with `R` / `⇧R` or a double-click, nudge them ⅛″ with the arrow keys (1″ with ⇧), and send them back to the cut list with `⌫`.
 - **Areas as installed:** shows each area with the stone it actually gets. Backsplashes sit directly above their counter, so you can judge how the veins flow.
+- **Mitered edges:** counters with a mitered (waterfall) front or end get a drop strip, 2″ by default. It's cut attached to that edge on the slab so the veins wrap, and it counts toward overlap and edge checks. In the Selected piece panel, toggle Front / Left / Right and set the drop height; the counter stays put as the strip appears or disappears. Defaults live in `js/data.js` (`miter`), and each layout saves its own settings.
 - **Checks:** warns about overlaps, pieces closer than the minimum gap (saw kerf), and pieces too close to the slab edge.
 
 ## Sharing
 
-GitHub Pages is static, so nothing is stored on a server. Each person's work autosaves in their own browser. To share:
+GitHub Pages is static, so nothing is stored on a server. Each person's layouts autosave in their own browser. To share the active layout:
 
-- **Copy JSON / Paste JSON:** copy the layout and send it by text or email. The other person presses Paste JSON, or just ⌘V anywhere on the page. Their current layout is always one ⌘Z away.
+- **Copy JSON / Paste JSON:** copy the layout and send it by text or email. The other person presses Paste JSON, or just ⌘V anywhere on the page.
 - **Copy link:** a URL with the layout packed inside. Opening it loads that layout.
+
+A layout you receive is **added to your Layout menu** as a new layout, named after the sender's layout. Your own layouts are never overwritten. Receiving the same unchanged version twice just switches to the copy you already have. Duplicates record the layout they were based on, and that history travels with shared layouts.
 - **Export JPEG:** a full sheet with all three slabs, the areas as installed, notes and warnings. Each slab's **⤓ JPEG** button exports just that slab at higher resolution.
 
 ## Changing the data
