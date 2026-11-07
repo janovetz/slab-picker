@@ -41,7 +41,7 @@ export const AREAS = [
       { id: 'bar-splash', name: 'Bar backsplash', kind: 'splash', w: 66, h: 71 },
       {
         id: 'bar-counter', name: 'Bar counter', kind: 'counter', w: 66, h: 25,
-        cutouts: [{ shape: 'rect', x: 25.5, y: 5, w: 15, h: 15 }], // 15" square sink, centered
+        cutouts: [{ shape: 'rect', x: 10, y: 5, w: 15, h: 15 }], // 15" square sink, 10" from the left end
       },
     ],
   },
