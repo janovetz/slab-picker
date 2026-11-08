@@ -47,21 +47,21 @@ export const AREAS = [
     id: 'mudroom', name: 'Mudroom', color: '#ffe14d',
     install: { counterHeight: 42 },
     pieces: [{
-      id: 'mudroom', name: 'Mudroom', kind: 'counter', w: 60, h: 27.5,
+      id: 'mudroom', name: 'Mudroom', kind: 'counter', w: 60, h: 27,
       // Straight 60" front edge. The back (wall) edge steps around a corner:
-      // the left 37" is 15.5" deep, the right-most 23" is 27.5" deep.
-      rects: [[0, 12, 60, 15.5], [37, 0, 23, 12]],
-      poly: [[0, 12], [37, 12], [37, 0], [60, 0], [60, 27.5], [0, 27.5]],
-      edge: [[0, 12], [37, 12], [37, 0], [60, 0]],
+      // the left 37" is 15.5" deep, the right-most 23" is 27" deep.
+      rects: [[0, 11.5, 60, 15.5], [37, 0, 23, 11.5]],
+      poly: [[0, 11.5], [37, 11.5], [37, 0], [60, 0], [60, 27], [0, 27]],
+      edge: [[0, 11.5], [37, 11.5], [37, 0], [60, 0]],
       miter: { edges: ['front', 'left'], d: 2 },
     }],
   },
   {
     id: 'bar', name: 'Bar', color: '#3ad4ff',
     pieces: [
-      { id: 'bar-splash', name: 'Bar backsplash', kind: 'splash', w: 66, h: 71 },
+      { id: 'bar-splash', name: 'Bar backsplash', kind: 'splash', w: 66, h: 63 },
       {
-        id: 'bar-counter', name: 'Bar counter', kind: 'counter', w: 66, h: 25,
+        id: 'bar-counter', name: 'Bar counter', kind: 'counter', w: 66, h: 25.5,
         cutouts: [{ shape: 'rect', x: 10, y: 5, w: 15, h: 15 }], // 15" square sink, 10" from the left end
         miter: { edges: ['front'], d: 2 },
       },
@@ -69,13 +69,13 @@ export const AREAS = [
   },
   {
     id: 'wine', name: 'Wine', color: '#ff4fa3',
-    pieces: [{ id: 'wine', name: 'Wine', kind: 'panel', w: 32, h: 48 }],
+    pieces: [{ id: 'wine', name: 'Wine', kind: 'panel', w: 26, h: 36 }],
   },
   {
     id: 'cooktop', name: 'Cooktop', color: '#9dff4a',
     pieces: [
-      { id: 'cooktop-splash', name: 'Cooktop backsplash', kind: 'splash', w: 68, h: 71 },
-      { id: 'cooktop-counter', name: 'Cooktop counter', kind: 'counter', w: 68, h: 25, miter: { edges: ['front'], d: 2 } },
+      { id: 'cooktop-splash', name: 'Cooktop backsplash', kind: 'splash', w: 68, h: 65 },
+      { id: 'cooktop-counter', name: 'Cooktop counter', kind: 'counter', w: 68, h: 25.5, miter: { edges: ['front'], d: 2 } },
     ],
   },
   {
@@ -89,10 +89,10 @@ export const AREAS = [
   {
     id: 'primary-bath', name: 'Primary bath', color: '#ff5b4f',
     pieces: [{
-      id: 'primary-bath', name: 'Primary bath', kind: 'counter', w: 101, h: 24,
+      id: 'primary-bath', name: 'Primary bath', kind: 'counter', w: 98, h: 24,
       cutouts: [
         { shape: 'circle', cx: 24, cy: 12, r: 7.5 }, // left sink
-        { shape: 'circle', cx: 77, cy: 12, r: 7.5 }, // right sink
+        { shape: 'circle', cx: 74, cy: 12, r: 7.5 }, // right sink (24" from each end, as before)
       ],
       miter: { edges: ['front'], d: 2 },
     }],
