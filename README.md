@@ -11,6 +11,13 @@ Live site: https://janovetz.github.io/slab-picker/
 - **Place pieces:** drag a piece from the cut list onto a slab, or press **Auto** to put it in the first free spot. On a slab you can drag pieces (they snap to edges and gaps; hold ⌥ to move freely), rotate them with `R` / `⇧R` or a double-click, nudge them ⅛″ with the arrow keys (1″ with ⇧), and send them back to the cut list with `⌫`.
 - **Areas as installed:** shows each area with the stone it actually gets. Backsplashes sit directly above their counter, so you can judge how the veins flow.
 - **Mitered edges:** counters with a mitered (waterfall) front or end get a drop strip, 2″ by default. It's cut attached to that edge on the slab so the veins wrap, and it counts toward overlap and edge checks. In the Selected piece panel, toggle Front / Left / Right and set the drop height; the counter stays put as the strip appears or disappears. Defaults live in `js/data.js` (`miter`), and each layout saves its own settings.
+- **3D view:** the **3D view** button (or **3D** on any area) shows each area as installed. The stone is cut from the slab exactly where your layout puts it, sitting on walnut plywood cabinets. Drag to orbit, scroll to zoom toward the cursor, and right-drag to pan. **Save image** downloads a captioned JPEG. Mitered drops show the strip cut beside that edge, so you can check the veins wrap. Unmitered edges just carry the edge of the stone down. Install dimensions live in `INSTALL` in `js/data.js`:
+  - 3 cm stone, 36″ finished height (42″ for the mudroom), ⅛″ overhang
+  - 4″ × 3″ toe kick
+  - three-drawer banks with the top drawer half-height, split into columns of 42″ or less
+  - wall panels hung 36″ off the floor
+
+  The 3D engine (three.js) loads from a CDN the first time you open the view.
 - **Checks:** warns about overlaps, pieces closer than the minimum gap (saw kerf), and pieces too close to the slab edge.
 
 ## Sharing

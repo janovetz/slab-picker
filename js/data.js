@@ -18,8 +18,24 @@
 export const SLAB = {
   width: 122,
   height: 79,
+  thickness: 1.18, // 3 cm
   image: 'assets/slab.jpg',
   count: 3,
+};
+
+// How things go together, for the 3D view (inches). An area can override any of these with `install`.
+export const INSTALL = {
+  counterHeight: 36,   // finished height: top of the stone
+  wallHeight: 108,
+  panelBottom: 36,     // wall panels (no counter): height of the bottom edge
+  cabinet: {
+    overhang: 0.125,   // stone past the cabinet face (plus the stone thickness where an edge is mitered)
+    toeKick: { h: 4, d: 3 },
+    frontThickness: 0.75,
+    reveal: 0.125,     // gap between drawer fronts
+    drawers: [0.5, 1, 1], // relative heights, top to bottom
+    maxDrawerWidth: 42,   // wider runs are split into columns
+  },
 };
 
 export const AREAS = [
@@ -29,6 +45,7 @@ export const AREAS = [
   },
   {
     id: 'mudroom', name: 'Mudroom', color: '#ffe14d',
+    install: { counterHeight: 42 },
     pieces: [{
       id: 'mudroom', name: 'Mudroom', kind: 'counter', w: 60, h: 27.5,
       // Straight 60" front edge. The back (wall) edge steps around a corner:

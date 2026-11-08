@@ -10,6 +10,12 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=DM+Mono:wght@400;500&family=Familjen+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    } }
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -31,6 +37,7 @@
         <button id="paste-json" title="Load a layout someone sent you (or just ⌘V anywhere)">Paste JSON</button>
         <button id="copy-link" title="Copy a link that opens this layout">Copy link</button>
       </div>
+      <button id="open-3d" title="See the areas in 3D on their cabinets">3D view</button>
       <button id="export" class="primary" title="Download a JPEG sheet with all slabs and areas">Export JPEG</button>
     </nav>
     <div class="layoutbar">
@@ -108,6 +115,24 @@
         <button value="ok" class="primary">Save</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="view3d" aria-label="3D view">
+    <header class="v3-head">
+      <h2>3D <span>as installed</span></h2>
+      <div class="v3-tabs" role="tablist"></div>
+      <div class="v3-actions">
+        <button class="v3-reset" title="Back to the starting view">Reset view</button>
+        <button class="v3-save primary" title="Download this view as a JPEG">Save image</button>
+        <button class="v3-close" title="Close (Esc)">Close</button>
+      </div>
+    </header>
+    <div class="v3-stage">
+      <canvas></canvas>
+      <p class="v3-status" hidden></p>
+      <p class="v3-note"></p>
+    </div>
+    <p class="v3-foot">Drag to orbit · scroll or pinch to zoom · right-drag or two fingers to pan. 3 cm stone on walnut plywood drawer cabinets, ⅛″ overhang. Uncut edges show the stone carried through; mitered drops show the strip cut beside them.</p>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

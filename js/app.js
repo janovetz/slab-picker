@@ -1,4 +1,5 @@
 import { SLAB, AREAS } from './data.js';
+import { open3D } from './view3d.js';
 
 // ============================================================ constants
 const APP_ID = 'slab-happy';
@@ -867,6 +868,28 @@ function installedDrops(p) {
   return drops(p).map(d => { const [x, y, w, h] = d.rect; return { ...d, rect: [mir ? p.w - x - w : x, y, w, h] }; });
 }
 
+/** A piece as installed (wall edge on top, mirrored left↔right when flipped), plus its installed → slab mapping. */
+function installedGeom(p) {
+  const pl = state.placements[p.id];
+  const mir = !!pl?.flip;
+  const mx = x => (mir ? p.w - x : x);
+  const poly = p.poly.map(([x, y]) => [mx(x), y]);
+  return {
+    placed: !!pl, slab: pl?.slab,
+    poly: mir ? poly.reverse() : poly,
+    rects: p.rects.map(([x, y, w, h]) => [mir ? p.w - x - w : x, y, w, h]),
+    cutouts: p.cutouts.map(c => (c.shape === 'circle' ? { ...c, cx: mx(c.cx) } : { ...c, x: mir ? p.w - c.x - c.w : c.x })),
+    edge: p.edge.map(([x, y]) => [mx(x), y]),
+    drops: installedDrops(p),
+    toSlab: pl ? (mir ? localToSlab(p, pl).translate(p.w, 0).scale(-1, 1) : localToSlab(p, pl)) : null,
+  };
+}
+
+function show3D(areaId) {
+  areaId ??= PIECE[selected]?.area.id ?? AREAS[0].id;
+  open3D({ areas: AREAS, img, installed: installedGeom, header: headerLines, download, slug, stamp }, areaId);
+}
+
 /**
  * Stack an area's pieces as installed: backsplash/panels above the counter, mitered drops unfolded
  * against their edges (so you see the veins wrap). `x` of each item is where its body starts.
@@ -1138,7 +1161,8 @@ function buildPreviews() {
   for (const area of AREAS) {
     const el = document.createElement('div');
     el.className = 'preview';
-    el.innerHTML = `<div class="preview-head"><span class="swatch" style="background:${area.color};height:14px"></span><b>${area.name}</b><span class="tags"></span></div><canvas></canvas>`;
+    el.innerHTML = `<div class="preview-head"><span class="swatch" style="background:${area.color};height:14px"></span><b>${area.name}</b><span class="tags"></span><button class="v3-open" title="See ${esc(area.name)} in 3D, on its cabinets">3D</button></div><canvas></canvas>`;
+    el.querySelector('.v3-open').addEventListener('click', e => { e.stopPropagation(); show3D(area.id); });
     const canvas = el.querySelector('canvas');
     const pv = { area, el, canvas, ctx: canvas.getContext('2d'), boxes: [] };
     canvas.addEventListener('click', e => {
@@ -1451,6 +1475,7 @@ function bindUI() {
   $('paste-json').addEventListener('click', openPasteDialog);
   $('copy-link').addEventListener('click', copyLink);
   $('export').addEventListener('click', exportSheet);
+  $('open-3d').addEventListener('click', () => show3D());
   $('reset').addEventListener('click', () => {
     if (!Object.keys(state.placements).length) return;
     if (!confirm('Clear all placements? (You can undo this.)')) return;
@@ -1504,7 +1529,7 @@ function bindUI() {
     toast('Layout JSON copied. Paste it into a text or email.');
   });
   document.addEventListener('paste', e => {
-    if (e.target.closest?.('input, textarea')) return;
+    if (e.target.closest?.('input, textarea') || document.querySelector('dialog[open]')) return;
     const text = e.clipboardData.getData('text/plain');
     if (!text) return;
     e.preventDefault();
