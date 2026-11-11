@@ -8,7 +8,15 @@ const LIBRARY_KEY = 'slab-happy:library:v1';
 const AUTHOR_KEY = 'slab-happy:author';
 const PREFS_KEY = 'slab-happy:prefs';
 const W = SLAB.width, H = SLAB.height;
-const SLABS = Array.from({ length: SLAB.count }, (_, i) => i + 1); // 1-based
+const SLABS = Array.from({ length: SLAB.count }, (_, i) => i + 1); // 1-based index (what layouts store)
+const slabInfo = n => SLAB.slabs[n - 1];
+const slabName = n => `Slab ${slabInfo(n).no}`;   // the yard's number, e.g. "Slab 13"
+const slabTag = n => `S${slabInfo(n).no}`;
+/** Slab inches → photo inches. A slab marked `mirror` shows the photo mirrored (bookmatching). */
+function stoneMatrix(n) {
+  const b = slabInfo(n).mirror;
+  return b === 'x' ? new DOMMatrix([-1, 0, 0, 1, W, 0]) : b === 'y' ? new DOMMatrix([1, 0, 0, -1, 0, H]) : new DOMMatrix();
+}
 const RULER = 28;
 const INK = '#1b1a17', PAPER = '#f6f3ec', ACCENT = '#ff5a1f', DANGER = '#ff2d3d';
 const EPS = 1e-6;
@@ -24,7 +32,7 @@ for (const area of AREAS) {
     p.poly ??= [[0, 0], [p.w, 0], [p.w, p.h], [0, p.h]];
     p.cutouts ??= [];
     p.edge ??= [[0, 0], [p.w, 0]];
-    p.edgeLabel = p.kind === 'counter' ? 'WALL' : 'TOP';
+    p.edgeLabel = p.kind === 'counter' || p.kind === 'shelf' ? 'WALL' : 'TOP';
     PIECES.push(p);
     PIECE[p.id] = p;
   }
@@ -437,10 +445,10 @@ function computeIssues() {
     const here = placedOn(slab);
     for (const [id, pl] of here) {
       if (outOfBounds(id, pl, 0)) {
-        issues.push({ ids: [id], text: `${PIECE[id].name} runs off the edge of Slab ${slab}` });
+        issues.push({ ids: [id], text: `${PIECE[id].name} runs off the edge of ${slabName(slab)}` });
         flagged.add(id);
       } else if (outOfBounds(id, pl, margin)) {
-        issues.push({ ids: [id], text: `${PIECE[id].name} is within ${fmt(margin)} of the edge of Slab ${slab}` });
+        issues.push({ ids: [id], text: `${PIECE[id].name} is within ${fmt(margin)} of the edge of ${slabName(slab)}` });
         flagged.add(id);
       }
     }
@@ -448,9 +456,9 @@ function computeIssues() {
       for (let j = i + 1; j < here.length; j++) {
         const [a, pa] = here[i], [b, pb] = here[j];
         if (piecesConflict(a, pa, b, pb, 0)) {
-          issues.push({ ids: [a, b], text: `${PIECE[a].name} overlaps ${PIECE[b].name} on Slab ${slab}` });
+          issues.push({ ids: [a, b], text: `${PIECE[a].name} overlaps ${PIECE[b].name} on ${slabName(slab)}` });
         } else if (piecesConflict(a, pa, b, pb, gap)) {
-          issues.push({ ids: [a, b], text: `${PIECE[a].name} and ${PIECE[b].name} are closer than ${fmt(gap)} on Slab ${slab}` });
+          issues.push({ ids: [a, b], text: `${PIECE[a].name} and ${PIECE[b].name} are closer than ${fmt(gap)} on ${slabName(slab)}` });
         } else continue;
         flagged.add(a); flagged.add(b);
       }
@@ -510,7 +518,7 @@ function findSpot(id, slabs = SLABS, rots = null) {
 
 function autoPlace(id, slabs) {
   const spot = findSpot(id, slabs);
-  if (!spot) { toast(`No free spot for ${PIECE[id].name}${slabs?.length === 1 ? ` on Slab ${slabs[0]}` : ''}.`); return false; }
+  if (!spot) { toast(`No free spot for ${PIECE[id].name}${slabs?.length === 1 ? ` on ${slabName(slabs[0])}` : ''}.`); return false; }
   mutate(() => { state.placements[id] = spot; });
   select(id);
   return true;
@@ -580,16 +588,30 @@ function select(id) {
 
 // ============================================================ drawing helpers
 let img;
-let scaledSlab = null;
-function getScaledSlab(pxW) {
-  pxW = Math.max(1, Math.round(pxW));
-  if (scaledSlab?.width === pxW) return scaledSlab;
+/** Draw the stone face of slab n onto a w × h canvas (mirrored where the slab says so). */
+function faceCanvas(n, w, h) {
   const c = document.createElement('canvas');
-  c.width = pxW; c.height = Math.round(pxW * H / W);
+  c.width = w; c.height = h;
   const x = c.getContext('2d');
   x.imageSmoothingQuality = 'high';
-  x.drawImage(img, 0, 0, c.width, c.height);
-  return (scaledSlab = c);
+  const m = stoneMatrix(n);
+  x.setTransform(m.a, m.b, m.c, m.d, m.e * w / W, m.f * h / H);
+  x.drawImage(img, 0, 0, w, h);
+  return c;
+}
+const faces = {};
+/** Full-resolution face of slab n, in slab coordinates. */
+function slabImage(n) {
+  const b = slabInfo(n).mirror;
+  if (!b) return img;
+  return (faces[b] ??= faceCanvas(n, img.naturalWidth, img.naturalHeight));
+}
+const scaledFaces = {};
+function getScaledSlab(n, pxW) {
+  pxW = Math.max(1, Math.round(pxW));
+  const key = slabInfo(n).mirror || '-';
+  if (scaledFaces[key]?.width !== pxW) scaledFaces[key] = faceCanvas(n, pxW, Math.round(pxW * H / W));
+  return scaledFaces[key];
 }
 
 let hatch = null;
@@ -875,13 +897,14 @@ function installedGeom(p) {
   const mx = x => (mir ? p.w - x : x);
   const poly = p.poly.map(([x, y]) => [mx(x), y]);
   return {
-    placed: !!pl, slab: pl?.slab,
+    placed: !!pl, slab: pl && slabInfo(pl.slab).no,
     poly: mir ? poly.reverse() : poly,
     rects: p.rects.map(([x, y, w, h]) => [mir ? p.w - x - w : x, y, w, h]),
     cutouts: p.cutouts.map(c => (c.shape === 'circle' ? { ...c, cx: mx(c.cx) } : { ...c, x: mir ? p.w - c.x - c.w : c.x })),
     edge: p.edge.map(([x, y]) => [mx(x), y]),
     drops: installedDrops(p),
-    toSlab: pl ? (mir ? localToSlab(p, pl).translate(p.w, 0).scale(-1, 1) : localToSlab(p, pl)) : null,
+    // installed → photo inches (through the slab, then its mirror if any)
+    toPhoto: pl ? stoneMatrix(pl.slab).multiply(mir ? localToSlab(p, pl).translate(p.w, 0).scale(-1, 1) : localToSlab(p, pl)) : null,
   };
 }
 
@@ -895,7 +918,7 @@ function show3D(areaId) {
  * against their edges (so you see the veins wrap). `x` of each item is where its body starts.
  */
 function areaStack(area) {
-  const order = [...area.pieces].sort((a, b) => (a.kind === 'counter') - (b.kind === 'counter'));
+  const order = area.pieces;   // listed top to bottom in data.js
   const ext = order.map(p => {
     let x0 = 0, x1 = p.w, y1 = p.h;
     for (const { rect: [x, y, w, h] } of installedDrops(p)) { x0 = Math.min(x0, x); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h); }
@@ -928,7 +951,7 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
       if (pl) {
         ctx.clip();
         ctx.setTransform(base.multiply(new DOMMatrix().translate(px, py).scale(s).multiply(toSlab.inverse())));
-        ctx.drawImage(img, 0, 0, W, H);
+        ctx.drawImage(slabImage(pl.slab), 0, 0, W, H);
         ctx.setTransform(base);
       } else {
         ctx.fillStyle = hatchPattern(ctx); ctx.fill();
@@ -979,8 +1002,8 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
       ctx.fillStyle = PAPER; ctx.fillRect(cx - tw / 2, cy - fs * 0.8, tw, fs * 1.6);
       ctx.fillStyle = '#857f74'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(t, cx, cy + 0.5);
-    } else if (o.tags) {
-      const t = `S${pl.slab}${pl.rot ? ` · ${pl.rot}°` : ''}${pl.flip ? ' · mirrored' : ''}${flagged.has(p.id) ? ' · ⚠' : ''}`;
+    } else if (o.tags && p.rects[0][3] * s >= fs * 1.6 + 8) {   // skip on pieces too thin to hold the tag
+      const t = `${slabTag(pl.slab)}${pl.rot ? ` · ${pl.rot}°` : ''}${pl.flip ? ' · mirrored' : ''}${flagged.has(p.id) ? ' · ⚠' : ''}`;
       ctx.font = `500 ${fs}px "DM Mono"`;
       const tw = ctx.measureText(t).width + fs;
       ctx.fillStyle = flagged.has(p.id) ? DANGER : INK;
@@ -1007,7 +1030,7 @@ class SlabView {
     card.className = 'slab-card';
     card.innerHTML = `
       <div class="slab-head">
-        <div class="tb"><span class="tb-label">Sheet</span><span class="slab-title">Slab ${slab} <small>/ ${SLAB.count}</small></span></div>
+        <div class="tb"><span class="tb-label">Sheet</span><span class="slab-title">${slabName(slab)} <small>${slabInfo(slab).bookmatched ? 'bookmatched' : ''}</small></span></div>
         <div class="tb"><span class="tb-label">Pieces</span><span class="tb-value" data-k="pieces">0</span></div>
         <div class="tb"><span class="tb-label">Used</span><span class="tb-value" data-k="used">0%</span><div class="util-bar"><i></i></div></div>
         <div class="tb grow"></div>
@@ -1038,7 +1061,7 @@ class SlabView {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.clearRect(0, 0, this.cssW, this.cssH);
     drawSlab(ctx, this.slab, {
-      scale: this.scale, ox: RULER, oy: RULER, src: getScaledSlab(W * this.scale * DPR),
+      scale: this.scale, ox: RULER, oy: RULER, src: getScaledSlab(this.slab, W * this.scale * DPR),
       rulers: true, dim: prefs.dim, selectedId: selected, hoverId, ghost, offsets: true,
     });
   }
@@ -1253,7 +1276,7 @@ function renderCutlist() {
       ${area.pieces.map(p => {
         const pl = state.placements[p.id];
         const status = pl
-          ? `<span class="chip ${flagged.has(p.id) ? 'warn' : ''}">S${pl.slab}${pl.rot ? ' ↻' : ''}${pl.flip ? ' ⇅' : ''}</span>`
+          ? `<span class="chip ${flagged.has(p.id) ? 'warn' : ''}">${slabTag(pl.slab)}${pl.rot ? ' ↻' : ''}${pl.flip ? ' ⇅' : ''}</span>`
           : `<button class="auto" data-auto="${p.id}" title="Put it in the first free spot">Auto</button>`;
         return `<div class="piece-row ${pl ? '' : 'unplaced'} ${p.id === selected ? 'selected' : ''}" draggable="true" data-id="${p.id}">
           <span class="swatch" style="background:${area.color}"></span>
@@ -1291,7 +1314,7 @@ function renderPreviewTags() {
   for (const pv of Object.values(previewEls)) {
     pv.el.classList.toggle('selected', pv.area.pieces.some(p => p.id === selected));
     const slabs = [...new Set(pv.area.pieces.map(p => state.placements[p.id]?.slab).filter(Boolean))];
-    pv.el.querySelector('.tags').innerHTML = slabs.map(s => `<span class="chip">Slab ${s}</span>`).join('');
+    pv.el.querySelector('.tags').innerHTML = slabs.map(s => `<span class="chip">${slabName(s)}</span>`).join('');
   }
 }
 
@@ -1318,7 +1341,7 @@ function renderInspector() {
     <div class="insp-head"><span class="swatch" style="background:${p.area.color}"></span>
       <div><div class="insp-name">${esc(p.name)}</div><div class="insp-sub">${fmt(p.w)} × ${fmt(p.h)} · ${p.kind === 'splash' ? 'backsplash' : p.kind}</div></div></div>
     <div class="field"><span>Slab</span><div class="seg">
-      ${SLABS.map(s => `<button data-slab="${s}" class="${pl?.slab === s ? 'on' : ''}">${s}</button>`).join('')}
+      ${SLABS.map(s => `<button data-slab="${s}" class="${pl?.slab === s ? 'on' : ''}">${slabInfo(s).no}</button>`).join('')}
     </div></div>
     ${state.miters[p.id] ? `
     <div class="field"><span>Miter edges</span><div class="seg multi">
@@ -1766,11 +1789,11 @@ async function exportSheet() {
   for (const slab of SLABS) {
     const by = top + (slab - 1) * (slabBlock + slabGap);
     ctx.fillStyle = INK; ctx.font = '800 40px "Big Shoulders Display"'; ctx.textAlign = 'left';
-    ctx.fillText(`SLAB ${slab}`, PAD, by + 38);
+    ctx.fillText(slabName(slab).toUpperCase(), PAD, by + 38);
     const here = placedOn(slab);
     ctx.font = '400 19px "DM Mono"'; ctx.fillStyle = '#4a463f';
-    ctx.fillText(here.length ? here.map(([id]) => PIECE[id].name).join(' · ') : 'unused', PAD + 140, by + 36);
-    drawSlab(ctx, slab, { scale: S, ox: PAD + R, oy: by + 56 + R, src: img, rulers: true, dim: prefs.dim, coords: true });
+    ctx.fillText((slabInfo(slab).bookmatched ? 'bookmatched · ' : '') + (here.length ? here.map(([id]) => PIECE[id].name).join(' · ') : 'unused'), PAD + 150, by + 36);
+    drawSlab(ctx, slab, { scale: S, ox: PAD + R, oy: by + 56 + R, src: slabImage(slab), rulers: true, dim: prefs.dim, coords: true });
   }
 
   // areas column
@@ -1795,8 +1818,8 @@ async function exportSheet() {
     ctx.fillText(area.name, ax + 24, ay + 28);
     const tags = area.pieces.map(p => {
       const pl = state.placements[p.id];
-      const nm = p.kind === 'splash' ? 'splash' : p.kind === 'counter' && area.pieces.length > 1 ? 'counter' : '';
-      return `${nm ? nm + ' ' : ''}${pl ? 'S' + pl.slab : '—'}`;
+      const nm = p.tag ?? (p.kind === 'splash' ? 'splash' : p.kind === 'counter' && area.pieces.length > 1 ? 'counter' : '');
+      return `${nm ? nm + ' ' : ''}${pl ? slabTag(pl.slab) : '—'}`;
     }).join(' · ');
     ctx.font = '400 18px "DM Mono"'; ctx.fillStyle = '#4a463f'; ctx.textAlign = 'right';
     ctx.fillText(tags, ax + rightW, ay + 27); ctx.textAlign = 'left';
@@ -1820,12 +1843,14 @@ async function exportSlab(slab) {
   drawSheetFrame(ctx, width, height);
   ctx.fillStyle = INK; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   ctx.font = '800 60px "Big Shoulders Display"';
-  ctx.fillText(`SLAB ${slab} / ${SLAB.count}`, PAD, PAD + 56);
+  const title = slabName(slab).toUpperCase() + (slabInfo(slab).bookmatched ? ' · BOOKMATCHED' : '');
+  ctx.fillText(title, PAD, PAD + 56);
+  const tw = ctx.measureText(title).width;
   ctx.font = '500 26px "Familjen Grotesk"';
-  ctx.fillText(`${name} · by ${who} · ${when}`, PAD + 330, PAD + 50);
-  drawSlab(ctx, slab, { scale: S, ox: PAD + R, oy: PAD + 110 + R, src: img, rulers: true, dim: prefs.dim, coords: true });
-  download(c, `slab-${slab}-${slug(name)}-${slug(state.author)}-${stamp()}.jpg`);
-  toast(`Exported Slab ${slab}.`);
+  ctx.fillText(`${name} · by ${who} · ${when}`, PAD + Math.max(330, tw + 40), PAD + 50);
+  drawSlab(ctx, slab, { scale: S, ox: PAD + R, oy: PAD + 110 + R, src: slabImage(slab), rulers: true, dim: prefs.dim, coords: true });
+  download(c, `slab-${slabInfo(slab).no}-${slug(name)}-${slug(state.author)}-${stamp()}.jpg`);
+  toast(`Exported ${slabName(slab)}.`);
 }
 
 // ============================================================ toast

@@ -150,7 +150,7 @@ function frame(focus) {
   const cam = V.camera;
   const vfov = THREE.MathUtils.degToRad(cam.fov);
   const fit = Math.min(vfov, 2 * Math.atan(Math.tan(vfov / 2) * cam.aspect));
-  const dist = (r / Math.sin(fit / 2)) * 0.95;
+  const dist = (r / Math.sin(fit / 2)) * 1.08;
   cam.position.copy(c).addScaledVector(new THREE.Vector3(-0.42, 0.36, 1).normalize(), dist);
   cam.near = Math.max(0.5, dist / 60);
   cam.far = dist * 30;
@@ -247,9 +247,9 @@ function walnutCanvas() {
 
 // ============================================================ geometry helpers
 /** Matrix for plan-view shapes: local (x, y) → world (X = x, Z = y), extruded downward from `top`. */
-const planM = top => new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, top, 0, 1, 0, 0, 0, 0, 0, 1);
-/** Matrix for wall-mounted shapes: local (x, y-down) → world (X = x, Y = bottom + h − y), front face at Z = T. */
-const wallM = (bottom, h) => new THREE.Matrix4().set(1, 0, 0, 0, 0, -1, 0, bottom + h, 0, 0, -1, T, 0, 0, 0, 1);
+const planM = (top, z0 = 0) => new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, top, 0, 1, 0, z0, 0, 0, 0, 1);
+/** Matrix for upright shapes: local (x, y-down) → world (X = x, Y = bottom + h − y), front face at Z = front. */
+const wallM = (bottom, h, front = T) => new THREE.Matrix4().set(1, 0, 0, 0, 0, -1, 0, bottom + h, 0, 0, -1, front, 0, 0, 0, 1);
 
 function holePath(c, grow = 0) {
   const p = new THREE.Path();
@@ -319,12 +319,13 @@ function buildArea(area) {
   const Hc = ins.counterHeight;
   let counterGeom = null, xMax = 0;
 
-  for (const p of area.pieces) {
+  let stackY = ins.panelBottom;   // without a counter, pieces stack up the wall from the bottom of the list
+  for (const p of [...area.pieces].reverse()) {
     const g = api.installed(p);
     if (!g.placed) missing.push(p.name);
     const mat = g.placed ? V.mats.stone : V.mats.blank;
     const uvAt = g.placed ? (x, y) => {
-      const q = g.toSlab.transformPoint({ x, y });
+      const q = g.toPhoto.transformPoint({ x, y });
       return [q.x / SLAB.width, 1 - q.y / SLAB.height];
     } : null;
     xMax = Math.max(xMax, p.w);
@@ -332,9 +333,20 @@ function buildArea(area) {
     if (p.kind === 'counter') {
       counterGeom = g;
       buildCounter(p, g, Hc, cab, mat, uvAt, add);
+    } else if (counter && p.mount?.on === 'splash') {
+      add(plate(g.poly, [], T, uvAt, planM(Hc + p.mount.above + T, T)), mat);   // ledge on the backsplash face
+    } else if (counter) {
+      add(plate(g.poly, [], T, uvAt, wallM(Hc, p.h)), mat);            // backsplash standing on the counter
+    } else if (p.kind === 'shelf') {
+      add(plate(g.poly, [], T, uvAt, planM(stackY + T)), mat);         // shelf, back edge on the wall
+      stackY += T;
+    } else if (p.mount === 'shelf-front') {
+      const shelf = area.pieces.find(q => q.kind === 'shelf');
+      add(plate(g.poly, [], T, uvAt, wallM(stackY, p.h, shelf.h)), mat); // under the shelf's front edge
+      stackY += p.h;
     } else {
-      // backsplash on the counter, or a panel hung on the wall
-      add(plate(g.poly, [], T, uvAt, wallM(counter ? Hc : ins.panelBottom, p.h)), mat);
+      add(plate(g.poly, [], T, uvAt, wallM(stackY, p.h)), mat);        // wall panel
+      stackY += p.h;
     }
   }
 
