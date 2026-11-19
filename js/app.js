@@ -7,14 +7,18 @@ const LEGACY_KEY = 'slab-happy:layout:v1';   // single autosaved layout (pre-lib
 const LIBRARY_KEY = 'slab-happy:library:v1';
 const AUTHOR_KEY = 'slab-happy:author';
 const PREFS_KEY = 'slab-happy:prefs';
-const W = SLAB.width, H = SLAB.height;
 const SLABS = Array.from({ length: SLAB.count }, (_, i) => i + 1); // 1-based index (what layouts store)
 const slabInfo = n => SLAB.slabs[n - 1];
-const slabName = n => `Slab ${slabInfo(n).no}`;   // the yard's number, e.g. "Slab 13"
-const slabTag = n => `S${slabInfo(n).no}`;
+const slabName = n => slabInfo(n).name ?? `Slab ${slabInfo(n).no}`;   // the yard's number, e.g. "Slab 13"
+const slabTag = n => slabInfo(n).tag ?? `S${slabInfo(n).no}`;
+// Each slab can have its own size and photo (e.g. a remnant); the rest use SLAB's.
+const slabW = n => slabInfo(n).width ?? SLAB.width;
+const slabH = n => slabInfo(n).height ?? SLAB.height;
+const slabSrc = n => slabInfo(n).image ?? SLAB.image;
+const MAX_W = Math.max(...SLABS.map(slabW));   // slab cards share one scale, so smaller slabs show at true size
 /** Slab inches → photo inches. A slab marked `mirror` shows the photo mirrored (bookmatching). */
 function stoneMatrix(n) {
-  const b = slabInfo(n).mirror;
+  const b = slabInfo(n).mirror, W = slabW(n), H = slabH(n);
   return b === 'x' ? new DOMMatrix([-1, 0, 0, 1, W, 0]) : b === 'y' ? new DOMMatrix([1, 0, 0, -1, 0, H]) : new DOMMatrix();
 }
 const RULER = 28;
@@ -430,6 +434,7 @@ function piecesConflict(idA, plA, idB, plB, gap) {
 }
 
 function outOfBounds(id, pl, margin) {
+  const W = slabW(pl.slab), H = slabH(pl.slab);
   return slabRects(PIECE[id], pl).some(r =>
     r.x < margin - EPS || r.y < margin - EPS || r.x + r.w > W - margin + EPS || r.y + r.h > H - margin + EPS);
 }
@@ -472,6 +477,7 @@ function snapPosition(id, slab, x, y, rot, noSnap, scale) {
   if (noSnap) return [q8(x), q8(y)];
   const { gap, margin } = state.settings;
   const th = 9 / scale;
+  const W = slabW(slab), H = slabH(slab);
   const xs = [0, margin, W - margin - bw, W - bw];
   const ys = [0, margin, H - margin - bh, H - bh];
   for (const [oid, opl] of placedOn(slab)) {
@@ -496,6 +502,7 @@ function findSpot(id, slabs = SLABS, rots = null) {
   const cur = state.placements[id];
   rots ??= [...new Set([cur?.rot ?? 0, ((cur?.rot ?? 0) + 90) % 360])];
   for (const slab of slabs) {
+    const W = slabW(slab), H = slabH(slab);
     const others = placedOn(slab).filter(([oid]) => oid !== id);
     const otherRects = others.flatMap(([oid, opl]) => slabRects(PIECE[oid], opl));
     const xs = [...new Set([margin, ...otherRects.map(r => r.x + r.w + gap)])].sort((a, b) => a - b);
@@ -535,7 +542,7 @@ function rotateSelected(dir) {
     const [nw, nh] = bboxSize(p, pl.rot);
     // rotate about the center, but keep it on the slab if it fits
     const clamp = (v, max) => Math.min(Math.max(v, 0), Math.max(0, max));
-    pl.x = clamp(q8(cx - nw / 2), W - nw); pl.y = clamp(q8(cy - nh / 2), H - nh);
+    pl.x = clamp(q8(cx - nw / 2), slabW(pl.slab) - nw); pl.y = clamp(q8(cy - nh / 2), slabH(pl.slab) - nh);
   });
 }
 
@@ -587,7 +594,8 @@ function select(id) {
 }
 
 // ============================================================ drawing helpers
-let img;
+const photos = {};   // decoded slab photos, by path
+const slabPhoto = n => photos[slabSrc(n)];
 /** Draw the stone face of slab n onto a w × h canvas (mirrored where the slab says so). */
 function faceCanvas(n, w, h) {
   const c = document.createElement('canvas');
@@ -595,22 +603,22 @@ function faceCanvas(n, w, h) {
   const x = c.getContext('2d');
   x.imageSmoothingQuality = 'high';
   const m = stoneMatrix(n);
-  x.setTransform(m.a, m.b, m.c, m.d, m.e * w / W, m.f * h / H);
-  x.drawImage(img, 0, 0, w, h);
+  x.setTransform(m.a, m.b, m.c, m.d, m.e * w / slabW(n), m.f * h / slabH(n));
+  x.drawImage(slabPhoto(n), 0, 0, w, h);
   return c;
 }
 const faces = {};
 /** Full-resolution face of slab n, in slab coordinates. */
 function slabImage(n) {
-  const b = slabInfo(n).mirror;
+  const b = slabInfo(n).mirror, img = slabPhoto(n);
   if (!b) return img;
-  return (faces[b] ??= faceCanvas(n, img.naturalWidth, img.naturalHeight));
+  return (faces[`${slabSrc(n)}|${b}`] ??= faceCanvas(n, img.naturalWidth, img.naturalHeight));
 }
 const scaledFaces = {};
 function getScaledSlab(n, pxW) {
   pxW = Math.max(1, Math.round(pxW));
-  const key = slabInfo(n).mirror || '-';
-  if (scaledFaces[key]?.width !== pxW) scaledFaces[key] = faceCanvas(n, pxW, Math.round(pxW * H / W));
+  const key = `${slabSrc(n)}|${slabInfo(n).mirror || '-'}`;
+  if (scaledFaces[key]?.width !== pxW) scaledFaces[key] = faceCanvas(n, pxW, Math.round(pxW * slabH(n) / slabW(n)));
   return scaledFaces[key];
 }
 
@@ -656,7 +664,7 @@ function drawPill(ctx, cx, cy, lines, bg, fg, fs) {
   lines.forEach((t, i) => { ctx.font = fonts[i]; ctx.fillText(t, cx, ty + lh[i] / 2); ty += lh[i]; });
 }
 
-function drawRulers(ctx, s) {
+function drawRulers(ctx, s, W, H) {
   ctx.save();
   ctx.strokeStyle = INK; ctx.fillStyle = '#4a463f'; ctx.lineWidth = 1;
   const fs = Math.max(9, Math.min(16, s * 1.1));
@@ -835,10 +843,11 @@ function labelSpot(p) {
 /** Draw one slab with its pieces. Origin (ox, oy) is the slab's top-left corner. */
 function drawSlab(ctx, slab, o) {
   const s = o.scale;
+  const W = slabW(slab), H = slabH(slab);
   const SW = W * s, SH = H * s;
   ctx.save();
   ctx.translate(o.ox, o.oy);
-  if (o.rulers) drawRulers(ctx, s);
+  if (o.rulers) drawRulers(ctx, s, W, H);
   ctx.drawImage(o.src, 0, 0, SW, SH);
 
   const here = placedOn(slab);
@@ -897,7 +906,8 @@ function installedGeom(p) {
   const mx = x => (mir ? p.w - x : x);
   const poly = p.poly.map(([x, y]) => [mx(x), y]);
   return {
-    placed: !!pl, slab: pl && slabInfo(pl.slab).no,
+    placed: !!pl, slab: pl && slabName(pl.slab),
+    photo: pl && { img: slabPhoto(pl.slab), w: slabW(pl.slab), h: slabH(pl.slab) },
     poly: mir ? poly.reverse() : poly,
     rects: p.rects.map(([x, y, w, h]) => [mir ? p.w - x - w : x, y, w, h]),
     cutouts: p.cutouts.map(c => (c.shape === 'circle' ? { ...c, cx: mx(c.cx) } : { ...c, x: mir ? p.w - c.x - c.w : c.x })),
@@ -910,7 +920,7 @@ function installedGeom(p) {
 
 function show3D(areaId) {
   areaId ??= PIECE[selected]?.area.id ?? AREAS[0].id;
-  open3D({ areas: AREAS, img, installed: installedGeom, header: headerLines, download, slug, stamp }, areaId);
+  open3D({ areas: AREAS, installed: installedGeom, header: headerLines, download, slug, stamp }, areaId);
 }
 
 /**
@@ -951,7 +961,7 @@ function drawArea(ctx, area, x0, y0, s, o = {}) {
       if (pl) {
         ctx.clip();
         ctx.setTransform(base.multiply(new DOMMatrix().translate(px, py).scale(s).multiply(toSlab.inverse())));
-        ctx.drawImage(slabImage(pl.slab), 0, 0, W, H);
+        ctx.drawImage(slabImage(pl.slab), 0, 0, slabW(pl.slab), slabH(pl.slab));
         ctx.setTransform(base);
       } else {
         ctx.fillStyle = hatchPattern(ctx); ctx.fill();
@@ -1048,8 +1058,8 @@ class SlabView {
     const w = this.wrap.clientWidth;
     if (!w) return;
     this.cssW = w;
-    this.scale = (w - RULER - 4) / W;
-    this.cssH = Math.ceil(RULER + H * this.scale + 4);
+    this.scale = (w - RULER - 4) / MAX_W;
+    this.cssH = Math.ceil(RULER + slabH(this.slab) * this.scale + 4);
     this.canvas.style.height = this.cssH + 'px';
     this.canvas.width = Math.round(w * DPR);
     this.canvas.height = Math.round(this.cssH * DPR);
@@ -1061,7 +1071,7 @@ class SlabView {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     ctx.clearRect(0, 0, this.cssW, this.cssH);
     drawSlab(ctx, this.slab, {
-      scale: this.scale, ox: RULER, oy: RULER, src: getScaledSlab(this.slab, W * this.scale * DPR),
+      scale: this.scale, ox: RULER, oy: RULER, src: getScaledSlab(this.slab, slabW(this.slab) * this.scale * DPR),
       rulers: true, dim: prefs.dim, selectedId: selected, hoverId, ghost, offsets: true,
     });
   }
@@ -1303,7 +1313,7 @@ function renderSlabStats() {
   for (const v of views) {
     const here = placedOn(v.slab);
     const used = here.reduce((sum, [id]) => sum + allRects(PIECE[id]).reduce((a, r) => a + r[2] * r[3], 0), 0);
-    const pct = Math.round(used / (W * H) * 100);
+    const pct = Math.round(used / (slabW(v.slab) * slabH(v.slab)) * 100);
     v.card.querySelector('[data-k=pieces]').textContent = here.length;
     v.card.querySelector('[data-k=used]').textContent = `${pct}% · ${(used / 144).toFixed(1)} ft²`;
     v.card.querySelector('.util-bar i').style.width = Math.min(100, pct) + '%';
@@ -1734,7 +1744,7 @@ function headerLines() {
 async function exportSheet() {
   await document.fonts.ready;
   const S = 13, R = 34, PAD = 64;
-  const SW = W * S, SH = H * S;
+  const SW = MAX_W * S;
   const { name, who, when, placed } = headerLines();
 
   // measure header
@@ -1744,9 +1754,9 @@ async function exportSheet() {
   const issueLines = [...issues.map(i => '⚠ ' + i.text), ...notices.map(n => '⇅ ' + n.text)].slice(0, 10);
   const headerH = 150 + noteLines.length * 30 + (noteLines.length ? 16 : 0);
 
-  const slabBlock = 56 + R + SH;
+  const slabBlock = n => 56 + R + slabH(n) * S;
   const slabGap = 56;
-  const leftH = SLAB.count * slabBlock + (SLAB.count - 1) * slabGap;
+  const leftH = SLABS.reduce((a, n) => a + slabBlock(n), 0) + (SLAB.count - 1) * slabGap;
   const rightW = 760;
   const stacks = AREAS.map(areaStack);
   const labelH = 44, areaGap = 36;
@@ -1786,14 +1796,16 @@ async function exportSheet() {
   // slabs
   const top = PAD + headerH;
   ctx.textBaseline = 'alphabetic';
+  let by = top - slabGap;
   for (const slab of SLABS) {
-    const by = top + (slab - 1) * (slabBlock + slabGap);
+    by += slabGap;
     ctx.fillStyle = INK; ctx.font = '800 40px "Big Shoulders Display"'; ctx.textAlign = 'left';
     ctx.fillText(slabName(slab).toUpperCase(), PAD, by + 38);
     const here = placedOn(slab);
     ctx.font = '400 19px "DM Mono"'; ctx.fillStyle = '#4a463f';
     ctx.fillText((slabInfo(slab).bookmatched ? 'bookmatched · ' : '') + (here.length ? here.map(([id]) => PIECE[id].name).join(' · ') : 'unused'), PAD + 150, by + 36);
     drawSlab(ctx, slab, { scale: S, ox: PAD + R, oy: by + 56 + R, src: slabImage(slab), rulers: true, dim: prefs.dim, coords: true });
+    by += slabBlock(slab);
   }
 
   // areas column
@@ -1836,7 +1848,7 @@ async function exportSlab(slab) {
   await document.fonts.ready;
   const S = 24, R = 44, PAD = 60;
   const { name, who, when } = headerLines();
-  const width = PAD * 2 + R + W * S, height = PAD * 2 + 110 + R + H * S;
+  const width = PAD * 2 + R + slabW(slab) * S, height = PAD * 2 + 110 + R + slabH(slab) * S;
   const c = document.createElement('canvas');
   c.width = width; c.height = height;
   const ctx = c.getContext('2d');
@@ -1872,10 +1884,9 @@ function loadSaved() {
 
 async function boot() {
   loadSaved();
-  img = new Image();
-  img.src = SLAB.image;
+  const srcs = [...new Set(SLABS.map(slabSrc))];
   await Promise.all([
-    img.decode(),
+    ...srcs.map(src => { const im = (photos[src] = new Image()); im.src = src; return im.decode(); }),
     document.fonts.load('600 12px "Familjen Grotesk"'),
     document.fonts.load('400 12px "DM Mono"'),
     document.fonts.load('800 20px "Big Shoulders Display"'),

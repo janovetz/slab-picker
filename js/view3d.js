@@ -110,7 +110,7 @@ function initViewer() {
   controls.zoomToCursor = true;
   controls.addEventListener('change', render);
 
-  V = { renderer, scene, camera, controls, sun, stage, mats, group: null, areaId: null };
+  V = { renderer, scene, camera, controls, sun, stage, mats, stone: new Map(), group: null, areaId: null };
   new ResizeObserver(() => { resize(); render(); }).observe(stage);
 }
 
@@ -139,7 +139,7 @@ function show(areaId) {
   const slabs = [...new Set(area.pieces.map(p => api.installed(p).slab).filter(Boolean))].sort();
   $d('.v3-note').innerHTML = built.missing.length
     ? `<b>Not placed yet:</b> ${built.missing.join(', ')}. Shown in plain gray.`
-    : `Cut from slab${slabs.length > 1 ? 's' : ''} ${slabs.join(' + ')}`;
+    : `Cut from ${slabs.join(' + ')}`;
   render();
 }
 
@@ -168,20 +168,26 @@ function frame(focus) {
 }
 
 // ============================================================ materials
+/** Polished stone faced with one slab photo; one material per photo, kept for the session. */
+function stoneMat(img) {
+  if (!V.stone.has(img)) {
+    const tex = new THREE.Texture(img);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = V.renderer.capabilities.getMaxAnisotropy();
+    tex.needsUpdate = true;
+    V.stone.set(img, new THREE.MeshPhysicalMaterial({ map: tex, roughness: 0.14, clearcoat: 0.3, clearcoatRoughness: 0.08 }));
+  }
+  return V.stone.get(img);
+}
+
 function makeMaterials(renderer) {
   const aniso = renderer.capabilities.getMaxAnisotropy();
-  const stoneTex = new THREE.Texture(api.img);
-  stoneTex.colorSpace = THREE.SRGBColorSpace;
-  stoneTex.anisotropy = aniso;
-  stoneTex.needsUpdate = true;
-
   const woodTex = new THREE.CanvasTexture(walnutCanvas());
   woodTex.colorSpace = THREE.SRGBColorSpace;
   woodTex.wrapS = woodTex.wrapT = THREE.RepeatWrapping;
   woodTex.anisotropy = aniso;
 
   return {
-    stone: new THREE.MeshPhysicalMaterial({ map: stoneTex, roughness: 0.14, clearcoat: 0.3, clearcoatRoughness: 0.08 }),
     blank: new THREE.MeshStandardMaterial({ color: 0x9c978f, roughness: 0.6 }),
     walnut: new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.52 }),
     dark: new THREE.MeshStandardMaterial({ color: 0x15120f, roughness: 0.9 }),
@@ -319,14 +325,14 @@ function buildArea(area) {
   const Hc = ins.counterHeight;
   let counterGeom = null, xMax = 0;
 
-  let stackY = ins.panelBottom;   // without a counter, pieces stack up the wall from the bottom of the list
+  let stackY = ins.panelBottom, splashY = Hc;   // without a counter, pieces stack up the wall from the bottom of the list
   for (const p of [...area.pieces].reverse()) {
     const g = api.installed(p);
     if (!g.placed) missing.push(p.name);
-    const mat = g.placed ? V.mats.stone : V.mats.blank;
+    const mat = g.placed ? stoneMat(g.photo.img) : V.mats.blank;
     const uvAt = g.placed ? (x, y) => {
       const q = g.toPhoto.transformPoint({ x, y });
-      return [q.x / SLAB.width, 1 - q.y / SLAB.height];
+      return [q.x / g.photo.w, 1 - q.y / g.photo.h];
     } : null;
     xMax = Math.max(xMax, p.w);
 
@@ -336,7 +342,8 @@ function buildArea(area) {
     } else if (counter && p.mount?.on === 'splash') {
       add(plate(g.poly, [], T, uvAt, planM(Hc + p.mount.above + T, T)), mat);   // ledge on the backsplash face
     } else if (counter) {
-      add(plate(g.poly, [], T, uvAt, wallM(Hc, p.h)), mat);            // backsplash standing on the counter
+      add(plate(g.poly, [], T, uvAt, wallM(splashY, p.h)), mat);       // backsplash piece(s), stacked up from the counter
+      splashY += p.h;
     } else if (p.kind === 'shelf') {
       add(plate(g.poly, [], T, uvAt, planM(stackY + T)), mat);         // shelf, back edge on the wall
       stackY += T;

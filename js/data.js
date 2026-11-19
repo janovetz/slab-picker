@@ -25,7 +25,16 @@ export const SLAB = {
   // Sequential slabs from the block, by the yard's numbers. The photo is 13, which is bookmatched to
   // 12 and 14 (treated as identical to each other), so their faces are the photo mirrored.
   // mirror: 'x' = left↔right, 'y' = top↔bottom. `bookmatched` is just the label shown on the slab.
-  slabs: [{ no: 12, mirror: 'x' }, { no: 13, bookmatched: true }, { no: 14, mirror: 'x' }],
+  // A slab can override `width`, `height` and `image` (its own photo, made by tools/rectify.py), and
+  // `name` / `tag` (defaults "Slab <no>" / "S<no>"). Layouts store slabs by position in this list
+  // (1-based), so add new slabs at the end.
+  slabs: [
+    { no: 12, mirror: 'x' },
+    { no: 13, bookmatched: true },
+    { no: 14, mirror: 'x' },
+    // Size estimated from the photo's perspective (≈1.03 : 1), assuming the full 79" slab height.
+    { no: 'R1', name: 'Remnant 1', tag: 'R1', width: 81, height: 79, image: 'assets/slab-remnant1.jpg' },
+  ],
 };
 SLAB.count = SLAB.slabs.length;
 
@@ -87,9 +96,13 @@ export const AREAS = [
   {
     id: 'cooktop', name: 'Cooktop', color: '#9dff4a',
     pieces: [
-      // spice ledge: a 4" shelf on the face of the backsplash; `above` = its underside above the counter
-      { id: 'cooktop-ledge', name: 'Cooktop spice ledge', tag: 'ledge', kind: 'shelf', w: 68, h: 4, mount: { on: 'splash', above: 18 } },
-      { id: 'cooktop-splash', name: 'Cooktop backsplash', kind: 'splash', w: 68, h: 65 },
+      // Spice ledge: a 4" shelf fixed to the face of the backsplash, centered on the seam between its
+      // two pieces (18" up) to hide it. `above` = the ledge's underside above the counter.
+      { id: 'cooktop-ledge', name: 'Cooktop spice ledge', tag: 'ledge', kind: 'shelf', w: 68, h: 4, mount: { on: 'splash', above: 18 - SLAB.thickness / 2 } },
+      // The backsplash is two pieces (18" + 47" = 65"), stacked from the counter up; listed top first.
+      // The upper piece keeps the old one-piece id, so existing layouts keep its placement.
+      { id: 'cooktop-splash', name: 'Cooktop backsplash upper', tag: 'upper splash', kind: 'splash', w: 68, h: 47 },
+      { id: 'cooktop-splash-lower', name: 'Cooktop backsplash lower', tag: 'lower splash', kind: 'splash', w: 68, h: 18 },
       { id: 'cooktop-counter', name: 'Cooktop counter', kind: 'counter', w: 68, h: 25.5, miter: { edges: ['front'], d: 2 } },
     ],
   },

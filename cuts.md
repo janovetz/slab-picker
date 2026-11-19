@@ -11,7 +11,7 @@
 Three 28" wide rectangles: a 37.25" tall lower panel, a 7" deep shelf, and a 63" tall upper panel
 
 # cooktop
-68" wide, 25.5" deep surface with a 65" tall backsplash and a 68" wide, 4" deep spice ledge
+68" wide, 25.5" deep surface with a 65" tall backsplash in two pieces (18" lower, 47" upper) and a 68" wide, 4" deep spice ledge on the face of the backsplash, covering the seam
 
 # hall-bath
 53" wide, 21" deep rectangle with a round sink cutout on the right side
