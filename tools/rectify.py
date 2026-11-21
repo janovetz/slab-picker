@@ -18,7 +18,7 @@ PHOTOS = {
                      corners=[(83, 76), (5312, 80), (5180, 3388), (107, 3489)]),
     # Remnant 1: shot from above, so it's a keystone (wider at the top). The face's top-right corner is
     # just past the photo's right edge.
-    "slab-remnant1.jpg": dict(size=(81, 79), px_per_in=20,
+    "slab-remnant1.jpg": dict(size=(68, 66), px_per_in=24,
                               corners=[(10, 470), (1515, 460), (1458, 1850), (81, 1832)]),
 }
 PAD = 24  # px of edge-replicated border, so corners slightly outside the photo still sample stone

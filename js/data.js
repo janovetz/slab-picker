@@ -32,8 +32,8 @@ export const SLAB = {
     { no: 12, mirror: 'x' },
     { no: 13, bookmatched: true },
     { no: 14, mirror: 'x' },
-    // Size estimated from the photo's perspective (≈1.03 : 1), assuming the full 79" slab height.
-    { no: 'R1', name: 'Remnant 1', tag: 'R1', width: 81, height: 79, image: 'assets/slab-remnant1.jpg' },
+    // Measured: 68" W x 66" H.
+    { no: 'R1', name: 'Remnant 1', tag: 'R1', width: 68, height: 66, image: 'assets/slab-remnant1.jpg' },
   ],
 };
 SLAB.count = SLAB.slabs.length;
