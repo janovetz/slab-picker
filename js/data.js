@@ -17,6 +17,9 @@
 //   edge    – the wall/top edge as a polyline along the outline, in the same
 //             (clockwise) direction as poly (defaults to [[0, 0], [w, 0]])
 
+/** Centimetres → inches, for areas measured in cm. */
+const cm = v => v / 2.54;
+
 export const SLAB = {
   width: 122,
   height: 79,
@@ -62,12 +65,12 @@ export const AREAS = [
     id: 'mudroom', name: 'Mudroom', color: '#ffe14d',
     install: { counterHeight: 42 },
     pieces: [{
-      id: 'mudroom', name: 'Mudroom', kind: 'counter', w: 60, h: 27,
-      // Straight 60" front edge. The back (wall) edge steps around a corner:
-      // the left 37" is 15.5" deep, the right-most 23" is 27" deep.
-      rects: [[0, 11.5, 60, 15.5], [37, 0, 23, 11.5]],
-      poly: [[0, 11.5], [37, 11.5], [37, 0], [60, 0], [60, 27], [0, 27]],
-      edge: [[0, 11.5], [37, 11.5], [37, 0], [60, 0]],
+      // Measured in cm: straight 152 cm front edge. The back (wall) edge steps around a corner:
+      // the left 112.5 cm is 58 cm deep, the right-most 39.5 cm is 69.5 cm deep (11.5 cm deeper).
+      id: 'mudroom', name: 'Mudroom', kind: 'counter', w: cm(152), h: cm(69.5),
+      rects: [[0, cm(11.5), cm(152), cm(58)], [cm(112.5), 0, cm(39.5), cm(11.5)]],
+      poly: [[0, cm(11.5)], [cm(112.5), cm(11.5)], [cm(112.5), 0], [cm(152), 0], [cm(152), cm(69.5)], [0, cm(69.5)]],
+      edge: [[0, cm(11.5)], [cm(112.5), cm(11.5)], [cm(112.5), 0], [cm(152), 0]],
       miter: { edges: ['front', 'left'], d: 2 },
     }],
   },

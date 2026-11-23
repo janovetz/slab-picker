@@ -2,7 +2,7 @@
 40" wide, 25" deep, rectangle
 
 # mudroom
-60" wide, 15.5" deep rectangles. The right-most 23" of the area is 27" deep.
+152 cm (59.84") wide, 58 cm (22.83") deep. The right-most 39.5 cm (15.55") of the area is 69.5 cm (27.36") deep — 11.5 cm (4.53") deeper; the left 112.5 cm (44.29") is the 58 cm depth.
 
 # bar
 66" wide, 25.5" deep bar surface with a 15" square sink cutout with a 63" tall backsplash
